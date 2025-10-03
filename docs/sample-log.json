@@ -1,0 +1,87 @@
+[
+  {
+    "timestamp": "2025-10-03 14:32:18",
+    "level": "SUCCESS",
+    "message": "Telegram notification sent"
+  },
+  {
+    "timestamp": "2025-10-03 14:32:16",
+    "level": "SUCCESS",
+    "message": "Email notification sent to recipient@example.com"
+  },
+  {
+    "timestamp": "2025-10-03 14:32:14",
+    "level": "SUCCESS",
+    "message": "Pushbullet notification sent"
+  },
+  {
+    "timestamp": "2025-10-03 14:32:12",
+    "level": "INFO",
+    "message": "Trigger: Garage Door - HIGH"
+  },
+  {
+    "timestamp": "2025-10-03 14:30:45",
+    "level": "WARNING",
+    "message": "Garage Door notification rate limited"
+  },
+  {
+    "timestamp": "2025-10-03 14:30:40",
+    "level": "INFO",
+    "message": "Trigger: Garage Door - LOW"
+  },
+  {
+    "timestamp": "2025-10-03 14:30:38",
+    "level": "SUCCESS",
+    "message": "Pushbullet notification sent"
+  },
+  {
+    "timestamp": "2025-10-03 14:30:35",
+    "level": "INFO",
+    "message": "Trigger: Garage Door - HIGH"
+  },
+  {
+    "timestamp": "2025-10-03 14:15:22",
+    "level": "SUCCESS",
+    "message": "WiFi reconnected successfully"
+  },
+  {
+    "timestamp": "2025-10-03 14:15:18",
+    "level": "WARNING",
+    "message": "WiFi disconnected - attempting reconnection"
+  },
+  {
+    "timestamp": "2025-10-03 13:45:12",
+    "level": "ERROR",
+    "message": "Email failed - Authentication failed"
+  },
+  {
+    "timestamp": "2025-10-03 13:30:09",
+    "level": "SUCCESS",
+    "message": "Telegram notification sent"
+  },
+  {
+    "timestamp": "2025-10-03 13:30:08",
+    "level": "SUCCESS",
+    "message": "Email notification sent to recipient@example.com"
+  },
+  {
+    "timestamp": "2025-10-03 13:30:06",
+    "level": "SUCCESS",
+    "message": "Pushbullet notification sent"
+  },
+  {
+    "timestamp": "2025-10-03 13:30:05",
+    "level": "INFO",
+    "message": "Trigger: Garage Door - HIGH"
+  },
+  {
+    "timestamp": "2025-10-03 13:00:01",
+    "level": "SUCCESS",
+    "message": "WiFi connected - IP: 192.168.1.100"
+  },
+  {
+    "timestamp": "2025-10-03 12:59:58",
+    "level": "INFO",
+    "message": "System started - ESP32-Notifier v2.0"
+  }
+]

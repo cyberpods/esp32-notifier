@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>ESP32-Notifier v2.0</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .section {
+            margin: 15px 0;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #555;
+            font-size: 16px;
+        }
+        label {
+            display: block;
+            margin: 8px 0 4px;
+            font-weight: bold;
+            color: #666;
+            font-size: 14px;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 6px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        input[type=checkbox] {
+            width: auto;
+            margin-right: 6px;
+        }
+        textarea {
+            min-height: 50px;
+            font-family: monospace;
+        }
+        button {
+            background: #4CAF50;
+            color: #fff;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 4px 4px 4px 0;
+            font-size: 13px;
+        }
+        .btn-blue { background: #008CBA; }
+        .btn-red { background: #f44336; }
+        .btn-orange { background: #FF9800; }
+        .status {
+            padding: 8px;
+            background: #e7f3fe;
+            border-left: 4px solid #2196F3;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        .input-box {
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            background: #fff;
+            border-radius: 4px;
+        }
+        .test-btn {
+            background: #FF9800;
+            padding: 4px 8px;
+            font-size: 11px;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <h1>ESP32-Notifier v2.0</h1>
+        <div class='status'>
+            <b>Status:</b> WiFi:OK |IP:192.168.1.100 |Up:3245s |In1:L |In2:L |In3:L |In4:L
+        </div>
+
+        <form>
+            <!-- WiFi Section -->
+            <div class='section'>
+                <h2>WiFi</h2>
+                <label>SSID:</label>
+                <input type='text' value='MyHomeNetwork'>
+                <label>Password:</label>
+                <input type='password' value='••••••••••••'>
+            </div>
+
+            <!-- Web Authentication -->
+            <div class='section'>
+                <h2>Web Authentication</h2>
+                <label>Username:</label>
+                <input type='text' value='admin'>
+                <label>Password:</label>
+                <input type='password' value='••••••••'>
+            </div>
+
+            <!-- Pushbullet -->
+            <div class='section'>
+                <h2>Pushbullet</h2>
+                <label>
+                    <input type='checkbox' checked> Enable
+                </label>
+                <label>Token: <button type='button' class='test-btn'>Test</button></label>
+                <input type='text' value='o.X2pj82tAaxjSUWAwzfYVbZ5h431D09uQ'>
+            </div>
+
+            <!-- Email -->
+            <div class='section'>
+                <h2>Email (SMTP)</h2>
+                <label>
+                    <input type='checkbox' checked> Enable
+                </label>
+                <label>SMTP Server:</label>
+                <input type='text' value='smtp.gmail.com'>
+                <label>SMTP Port:</label>
+                <input type='number' value='465'>
+                <label>Your Email:</label>
+                <input type='email' value='myemail@gmail.com'>
+                <label>Password:</label>
+                <input type='password' value='••••••••••••••••'>
+                <label>Recipient Email: <button type='button' class='test-btn'>Test</button></label>
+                <input type='email' value='recipient@example.com'>
+            </div>
+
+            <!-- Telegram -->
+            <div class='section'>
+                <h2>Telegram</h2>
+                <label>
+                    <input type='checkbox' checked> Enable
+                </label>
+                <label>Bot Token:</label>
+                <input type='text' value='123456789:ABCdefGHIjklMNOpqrsTUVwxyz'>
+                <label>Chat ID: <button type='button' class='test-btn'>Test</button></label>
+                <input type='text' value='987654321'>
+            </div>
+
+            <!-- Input Configuration -->
+            <div class='section'>
+                <h2>Input Configuration</h2>
+
+                <div class='input-box'>
+                    <label>
+                        <input type='checkbox' checked> <b>Input 1</b>
+                    </label>
+                    <label>Name:</label>
+                    <input type='text' value='Garage Door'>
+                    <label>GPIO Pin:</label>
+                    <input type='number' value='4'>
+                    <label>Mode:</label>
+                    <select>
+                        <option selected>Toggle</option>
+                        <option>Momentary</option>
+                    </select>
+                    <label>ON Message:</label>
+                    <textarea>🟢 Garage door opened at {timestamp}</textarea>
+                    <label>OFF Message:</label>
+                    <textarea>🔴 Garage door closed at {timestamp}</textarea>
+                </div>
+
+                <div class='input-box' style='opacity:0.6'>
+                    <label>
+                        <input type='checkbox'> <b>Input 2</b>
+                    </label>
+                    <label>Name:</label>
+                    <input type='text' value='Front Doorbell' disabled>
+                    <label>GPIO Pin:</label>
+                    <input type='number' value='5' disabled>
+                    <label>Mode:</label>
+                    <select disabled>
+                        <option>Toggle</option>
+                        <option selected>Momentary</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- General Settings -->
+            <div class='section'>
+                <h2>General</h2>
+                <label>Title:</label>
+                <input type='text' value='Home Automation Alert'>
+                <label>Timezone:</label>
+                <select>
+                    <option>UTC-5 (Eastern Time)</option>
+                    <option selected>UTC-4 (Atlantic Time)</option>
+                    <option>UTC+0 (London, Lisbon)</option>
+                </select>
+                <label>DST Offset (sec):</label>
+                <input type='number' value='0'>
+            </div>
+
+            <button type='submit'>Save Configuration</button>
+            <button type='button' class='btn-blue'>Refresh</button>
+            <button type='button' class='btn-orange'>View Logs</button>
+            <button type='button' class='btn-red'>Restart</button>
+        </form>
+    </div>
+</body>
+</html>

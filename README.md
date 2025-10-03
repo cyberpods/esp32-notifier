@@ -40,15 +40,51 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 - Serial debug output with detailed diagnostics
 - Live status monitoring
 
+## Screenshots & Diagrams
+
+### Web Interface
+
+<table>
+  <tr>
+    <td><img src="docs/wifi-setup.html" alt="WiFi Setup Mode" width="400"/><br/><i>WiFi Setup Mode (Access Point)</i></td>
+    <td><img src="docs/main-config.html" alt="Main Configuration" width="400"/><br/><i>Main Configuration Interface</i></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/logs-viewer.html" alt="Logs Viewer" width="800"/><br/><i>System Logs Viewer</i></td>
+  </tr>
+</table>
+
+### Wiring Diagrams
+
+<table>
+  <tr>
+    <td><img src="docs/wiring-toggle.svg" alt="Toggle Switch Wiring" width="400"/><br/><i>Toggle Switch (Door Sensor)</i></td>
+    <td><img src="docs/wiring-momentary.svg" alt="Momentary Switch Wiring" width="400"/><br/><i>Momentary Switch (Doorbell)</i></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/wiring-multi-input.svg" alt="Multi-Input Wiring" width="600"/><br/><i>Multi-Input Configuration (4 switches)</i></td>
+  </tr>
+</table>
+
+### Example Output
+
+- 📋 [Terminal Output Sample](docs/terminal-output.txt) - Serial monitor output with notifications
+- 📊 [Sample Log File (JSON)](docs/sample-log.json) - System logs in JSON format
+
 ## Setup
 
 ### 1. Hardware Wiring
 
-Connect your switch between:
-- GPIO4 (configurable)
-- 3.3V
+**Basic Single Input:**
+- Connect your switch between GPIO4 and 3.3V
+- Internal pull-down resistor is enabled
+- Switch closed = HIGH (3.3V), Switch open = LOW (0V)
 
-The internal pull-down resistor is enabled, so when the switch closes, the pin reads HIGH.
+**Multi-Input Setup:**
+- See [wiring diagram](docs/wiring-multi-input.svg) for connecting up to 4 inputs
+- All inputs share common 3.3V power
+- Each input uses a separate GPIO pin (default: 4, 5, 6, 7)
+- Configure pins via web interface
 
 ### 2. Software Installation
 

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>ESP32-Notifier Setup</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .section {
+            margin: 15px 0;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 5px;
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #555;
+            font-size: 16px;
+        }
+        label {
+            display: block;
+            margin: 8px 0 4px;
+            font-weight: bold;
+            color: #666;
+        }
+        input {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #4CAF50;
+            color: #fff;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .info {
+            background: #e7f3fe;
+            border-left: 4px solid #2196F3;
+            padding: 10px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <h1>ESP32-Notifier Setup</h1>
+        <div class='info'>
+            Welcome! Connect to your WiFi network to get started.
+        </div>
+        <form>
+            <div class='section'>
+                <h2>WiFi Configuration</h2>
+                <label>Network Name (SSID):</label>
+                <input type='text' value='MyHomeNetwork' placeholder='Your WiFi Network'>
+                <label>Password:</label>
+                <input type='password' value='••••••••••••' placeholder='WiFi Password'>
+            </div>
+            <button type='submit'>Connect to WiFi</button>
+        </form>
+        <div class='section' style='margin-top:20px'>
+            <small>After connecting, the device will restart and join your WiFi network.
+            You can then access the full configuration page using the IP address shown in the Serial Monitor.</small>
+        </div>
+    </div>
+</body>
+</html>
