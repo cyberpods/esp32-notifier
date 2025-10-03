@@ -1,0 +1,29 @@
+# Arduino IDE
+*.hex
+*.elf
+*.bin
+*.map
+build/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Credentials (if any user adds them)
+credentials.h
+secrets.h
+
+# Old directory (to be removed)
+switch_notifier/
