@@ -253,6 +253,31 @@ After uploading, check the Serial Monitor (115200 baud) to find the device's IP 
 
 4. **Start your bot**: Send `/start` to your bot on Telegram
 
+### Changing WiFi Networks
+
+If you need to connect to a different WiFi network:
+
+1. **Method 1: Reset via Web Interface** (Recommended)
+   - Log in to the web interface
+   - Go to the WiFi section
+   - Click the red "Reset WiFi" button
+   - Confirm the action
+   - Device will restart in Access Point mode
+   - Connect to `ESP32-Notifier-Setup` network (password: `setup123`)
+   - Navigate to `http://192.168.4.1`
+   - Configure new WiFi credentials
+
+2. **Method 2: Edit via Web Interface**
+   - If you can still access the device on your network
+   - Simply update the SSID and Password fields
+   - Click "Save Configuration"
+   - Device will connect to the new network
+
+3. **Method 3: Re-flash Firmware**
+   - If you can't access the device at all
+   - Re-upload the sketch via Arduino IDE
+   - Device will start fresh in AP mode
+
 ## Troubleshooting
 
 ### General Issues

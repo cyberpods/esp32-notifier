@@ -539,6 +539,13 @@ void setupWebServer() {
     }
     handleLogs();
   });
+
+  server.on("/resetWiFi", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleResetWiFi();
+  });
 }
 
 void handleRoot() {
@@ -570,7 +577,7 @@ void handleRoot() {
   html += htmlEncode(wifi_ssid);
   html += F("' required><label>Password:</label><input type='password' name='wifi_password' value='");
   html += htmlEncode(wifi_password);
-  html += F("'></div>");
+  html += F("'><button type='button' class='b2' style='margin-top:10px' onclick=\"if(confirm('Reset WiFi credentials and restart in AP mode?'))location.href='/resetWiFi'\">Reset WiFi</button></div>");
 
   // Web Auth
   html += F("<div class='s'><h2>Web Authentication</h2><label>Username:</label><input name='web_user' value='");
@@ -899,6 +906,37 @@ void handleTestTelegram() {
   } else {
     server.send(400, "text/plain", "Telegram not configured");
   }
+}
+
+void handleResetWiFi() {
+  String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  "<title>Resetting WiFi...</title><style>"
+  "body{font-family:Arial;margin:20px;background:#f0f0f0;text-align:center}"
+  ".container{max-width:600px;margin:auto;background:#fff;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}"
+  "h1{color:#f44336}p{color:#666;line-height:1.6}"
+  "</style></head><body><div class='container'>"
+  "<h1>WiFi Settings Reset</h1>"
+  "<p>WiFi credentials have been cleared.</p>"
+  "<p>The device will restart in Access Point mode.</p>"
+  "<p><strong>Connect to:</strong> ESP32-Notifier-Setup</p>"
+  "<p><strong>Password:</strong> setup123</p>"
+  "<p><strong>Setup URL:</strong> http://192.168.4.1</p>"
+  "<p>This window will close automatically...</p>"
+  "</div><script>setTimeout(function(){window.close()},3000);</script></body></html>");
+
+  // Clear WiFi credentials
+  wifi_ssid = "";
+  wifi_password = "";
+
+  // Save empty credentials
+  savePreferences();
+
+  addLog("INFO", "WiFi credentials reset - restarting in AP mode");
+
+  server.send(200, "text/html", html);
+
+  delay(2000);
+  ESP.restart();
 }
 
 void sendNotifications(String title, String body) {
