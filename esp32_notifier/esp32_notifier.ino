@@ -176,6 +176,7 @@ void setup() {
   Serial.println(F("\n\n=== ESP32-Notifier v" VERSION " ==="));
 
   // Enable watchdog timer (new API for ESP32 Arduino Core 3.x)
+  esp_task_wdt_deinit();  // Deinitialize if already initialized
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms = WDT_TIMEOUT * 1000,
     .idle_core_mask = 0,
@@ -221,6 +222,14 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
 
+  // Always handle web server (needed for AP mode)
+  server.handleClient();
+
+  if (apMode) {
+    // In AP mode, just handle web requests for configuration
+    return;
+  }
+
   updateWiFiConnection();
 
   if (wifiState == WIFI_CONNECTED) {
@@ -229,7 +238,6 @@ void loop() {
     }
 
     checkAndReconnectWiFi();
-    server.handleClient();
     processRetryQueue();
   }
 
@@ -318,6 +326,7 @@ void connectWiFiNonBlocking() {
 }
 
 void updateWiFiConnection() {
+  if (apMode) return;  // Don't update WiFi state in AP mode
   if (wifiState == WIFI_CONNECTING) {
     if (WiFi.status() == WL_CONNECTED) {
       wifiState = WIFI_CONNECTED;
@@ -335,6 +344,7 @@ void updateWiFiConnection() {
 }
 
 void checkAndReconnectWiFi() {
+  if (apMode) return;  // Don't try to reconnect in AP mode
   if (millis() - lastWiFiCheck < WIFI_CHECK_INTERVAL) return;
   lastWiFiCheck = millis();
 
@@ -489,6 +499,10 @@ void setupWebServer() {
 
   server.on("/saveWiFi", HTTP_POST, []() {
     handleSaveWiFi();
+  });
+
+  server.on("/scanWiFi", []() {
+    handleScanWiFi();
   });
 
   server.on("/save", HTTP_POST, []() {
@@ -721,17 +735,34 @@ void handleWiFiSetup() {
   "label{display:block;margin:8px 0 4px;font-weight:bold;color:#666}input,select{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px}"
   "button{background:#4CAF50;color:#fff;padding:10px 20px;border:none;border-radius:4px;cursor:pointer;width:100%;font-size:16px;margin-top:10px}"
   "button:hover{background:#45a049}.info{background:#e7f3fe;border-left:4px solid #2196F3;padding:10px;margin:15px 0}"
-  ".net{padding:8px;margin:5px 0;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer}"
-  ".net:hover{background:#f0f0f0}"
+  ".net{padding:10px;margin:5px 0;background:#fff;border:1px solid #ddd;border-radius:4px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}"
+  ".net:hover{background:#f0f0f0}.scan-btn{background:#2196F3;margin-bottom:10px}.scan-btn:hover{background:#0b7dda}"
+  ".signal{font-size:12px;color:#666}#networks{max-height:300px;overflow-y:auto}"
   "</style></head><body><div class='c'><h1>ESP32-Notifier Setup</h1>"
   "<div class='info'>Welcome! Connect to your WiFi network to get started.</div>"
+  "<div class='s'><h2>Available Networks</h2>"
+  "<button type='button' class='scan-btn' onclick='scanNetworks()'>Scan for Networks</button>"
+  "<div id='networks'><p style='color:#666;text-align:center'>Click 'Scan for Networks' to see available WiFi networks</p></div></div>"
   "<form method='POST' action='/saveWiFi'><div class='s'><h2>WiFi Configuration</h2>"
-  "<label>Network Name (SSID):</label><input name='ssid' required placeholder='Your WiFi Network'>"
+  "<label>Network Name (SSID):</label><input id='ssid' name='ssid' required placeholder='Your WiFi Network'>"
   "<label>Password:</label><input type='password' name='password' required placeholder='WiFi Password'>"
   "</div><button type='submit'>Connect to WiFi</button></form>"
   "<div class='s' style='margin-top:20px'><small>After connecting, the device will restart and join your WiFi network. "
   "You can then access the full configuration page using the IP address shown in the Serial Monitor.</small></div>"
-  "</div></body></html>");
+  "</div><script>"
+  "function scanNetworks(){"
+  "document.getElementById('networks').innerHTML='<p style=\"text-align:center\">Scanning...</p>';"
+  "fetch('/scanWiFi').then(r=>r.json()).then(d=>{"
+  "let h='';if(d.networks.length==0)h='<p style=\"color:#666;text-align:center\">No networks found</p>';else{"
+  "d.networks.forEach(n=>{"
+  "let bars='';for(let i=0;i<4;i++)bars+=(n.rssi>(-90+i*10)?'▂':' ');"
+  "h+='<div class=\"net\" onclick=\"selectNetwork(\\''+n.ssid+'\\')\">';"
+  "h+='<span>'+n.ssid+(n.enc?' 🔒':'')+'</span>';"
+  "h+='<span class=\"signal\">'+bars+'</span></div>';})}"
+  "document.getElementById('networks').innerHTML=h;"
+  "}).catch(e=>{document.getElementById('networks').innerHTML='<p style=\"color:red\">Scan failed</p>';});}"
+  "function selectNetwork(ssid){document.getElementById('ssid').value=ssid;document.getElementById('ssid').focus();}"
+  "</script></body></html>");
 
   server.send(200, "text/html", html);
 }
@@ -759,6 +790,45 @@ void handleSaveWiFi() {
   } else {
     server.send(400, "text/plain", "Missing WiFi credentials");
   }
+}
+
+void handleScanWiFi() {
+  Serial.println(F("Scanning WiFi networks..."));
+  int n = WiFi.scanNetworks();
+
+  String json = "{\"networks\":[";
+
+  if (n > 0) {
+    for (int i = 0; i < n; i++) {
+      if (i > 0) json += ",";
+      json += "{";
+      json += "\"ssid\":\"";
+
+      // Properly escape SSID for JSON
+      String ssid = WiFi.SSID(i);
+      for (unsigned int j = 0; j < ssid.length(); j++) {
+        char c = ssid.charAt(j);
+        if (c == '"' || c == '\\') {
+          json += '\\';
+        }
+        if (c >= 32 && c <= 126) {  // Printable ASCII only
+          json += c;
+        }
+      }
+
+      json += "\",";
+      json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
+      json += "\"enc\":" + String(WiFi.encryptionType(i) != WIFI_AUTH_OPEN ? "true" : "false");
+      json += "}";
+    }
+  }
+
+  json += "]}";
+
+  WiFi.scanDelete();
+  Serial.println(F("WiFi scan complete"));
+
+  server.send(200, "application/json", json);
 }
 
 void handleSave() {

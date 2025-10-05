@@ -1,0 +1,56 @@
+<svg width="1000" height="600" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1000" height="600" fill="#1e1e1e"/>
+  <rect x="50" y="30" width="900" height="540" fill="#1e1e1e" rx="8"/>
+
+  <!-- Back Button -->
+  <rect x="70" y="50" width="100" height="30" fill="#4CAF50" rx="4"/>
+  <text x="120" y="70" font-family="Arial" font-size="14" fill="white" text-anchor="middle">← Back</text>
+
+  <!-- Header -->
+  <text x="500" y="110" font-family="Arial" font-size="28" fill="#4ec9b0" text-anchor="middle" font-weight="bold">System Logs</text>
+
+  <!-- Log Entry 1 - SUCCESS -->
+  <rect x="70" y="140" width="860" height="55" fill="#1e3a1e" rx="4"/>
+  <rect x="70" y="140" width="4" height="55" fill="#4caf50"/>
+  <text x="85" y="160" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:23:45]</text>
+  <text x="275" y="160" font-family="monospace" font-size="12" fill="#4caf50" font-weight="bold">SUCCESS</text>
+  <text x="85" y="180" font-family="monospace" font-size="12" fill="#d4d4d4">WiFi connected - IP: 192.168.1.100</text>
+
+  <!-- Log Entry 2 - INFO -->
+  <rect x="70" y="205" width="860" height="55" fill="#1e3a5f" rx="4"/>
+  <rect x="70" y="205" width="4" height="55" fill="#4fc3f7"/>
+  <text x="85" y="225" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:24:12]</text>
+  <text x="275" y="225" font-family="monospace" font-size="12" fill="#4fc3f7" font-weight="bold">INFO</text>
+  <text x="85" y="245" font-family="monospace" font-size="12" fill="#d4d4d4">Trigger: Front Door Sensor - HIGH</text>
+
+  <!-- Log Entry 3 - SUCCESS -->
+  <rect x="70" y="270" width="860" height="55" fill="#1e3a1e" rx="4"/>
+  <rect x="70" y="270" width="4" height="55" fill="#4caf50"/>
+  <text x="85" y="290" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:24:13]</text>
+  <text x="275" y="290" font-family="monospace" font-size="12" fill="#4caf50" font-weight="bold">SUCCESS</text>
+  <text x="85" y="310" font-family="monospace" font-size="12" fill="#d4d4d4">Pushbullet notification sent</text>
+
+  <!-- Log Entry 4 - SUCCESS -->
+  <rect x="70" y="335" width="860" height="55" fill="#1e3a1e" rx="4"/>
+  <rect x="70" y="335" width="4" height="55" fill="#4caf50"/>
+  <text x="85" y="355" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:24:14]</text>
+  <text x="275" y="355" font-family="monospace" font-size="12" fill="#4caf50" font-weight="bold">SUCCESS</text>
+  <text x="85" y="375" font-family="monospace" font-size="12" fill="#d4d4d4">Email notification sent to notify@example.com</text>
+
+  <!-- Log Entry 5 - WARNING -->
+  <rect x="70" y="400" width="860" height="55" fill="#3a2e1e" rx="4"/>
+  <rect x="70" y="400" width="4" height="55" fill="#ff9800"/>
+  <text x="85" y="420" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:24:20]</text>
+  <text x="275" y="420" font-family="monospace" font-size="12" fill="#ff9800" font-weight="bold">WARNING</text>
+  <text x="85" y="440" font-family="monospace" font-size="12" fill="#d4d4d4">Front Door Sensor notification rate limited</text>
+
+  <!-- Log Entry 6 - INFO -->
+  <rect x="70" y="465" width="860" height="55" fill="#1e3a5f" rx="4"/>
+  <rect x="70" y="465" width="4" height="55" fill="#4fc3f7"/>
+  <text x="85" y="485" font-family="monospace" font-size="12" fill="#858585">[2025-10-04 15:25:01]</text>
+  <text x="275" y="485" font-family="monospace" font-size="12" fill="#4fc3f7" font-weight="bold">INFO</text>
+  <text x="85" y="505" font-family="monospace" font-size="12" fill="#d4d4d4">Trigger: Front Door Sensor - LOW</text>
+
+  <!-- Auto-refresh note -->
+  <text x="500" y="555" font-family="monospace" font-size="11" fill="#666" text-anchor="middle">Auto-refreshes every 10 seconds</text>
+</svg>

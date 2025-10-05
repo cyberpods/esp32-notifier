@@ -1,0 +1,53 @@
+<svg width="800" height="700" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="700" fill="#f0f0f0"/>
+  <rect x="100" y="50" width="600" height="600" fill="white" rx="8" stroke="#ddd" stroke-width="2"/>
+
+  <!-- Header -->
+  <text x="400" y="100" font-family="Arial" font-size="24" fill="#333" text-anchor="middle" font-weight="bold">ESP32-Notifier Setup</text>
+
+  <!-- Info box -->
+  <rect x="120" y="120" width="560" height="40" fill="#e7f3fe" rx="4"/>
+  <rect x="120" y="120" width="4" height="40" fill="#2196F3"/>
+  <text x="130" y="145" font-family="Arial" font-size="13" fill="#333">Welcome! Connect to your WiFi network to get started.</text>
+
+  <!-- Available Networks Section -->
+  <rect x="120" y="180" width="560" height="280" fill="#f9f9f9" rx="5"/>
+  <text x="130" y="205" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Available Networks</text>
+
+  <!-- Scan Button -->
+  <rect x="130" y="215" width="540" height="35" fill="#2196F3" rx="4"/>
+  <text x="400" y="237" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Scan for Networks</text>
+
+  <!-- Network List -->
+  <rect x="130" y="260" width="540" height="45" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="285" font-family="Arial" font-size="14" fill="#333">MyHomeNetwork 🔒</text>
+  <text x="660" y="285" font-family="monospace" font-size="12" fill="#666" text-anchor="end">▂▂▂▂</text>
+
+  <rect x="130" y="310" width="540" height="45" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="335" font-family="Arial" font-size="14" fill="#333">Office-WiFi 🔒</text>
+  <text x="660" y="335" font-family="monospace" font-size="12" fill="#666" text-anchor="end">▂▂▂ </text>
+
+  <rect x="130" y="360" width="540" height="45" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="385" font-family="Arial" font-size="14" fill="#333">Guest-Network</text>
+  <text x="660" y="385" font-family="monospace" font-size="12" fill="#666" text-anchor="end">▂▂  </text>
+
+  <rect x="130" y="410" width="540" height="45" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="435" font-family="Arial" font-size="14" fill="#333">Neighbor-WiFi 🔒</text>
+  <text x="660" y="435" font-family="monospace" font-size="12" fill="#666" text-anchor="end">▂   </text>
+
+  <!-- WiFi Configuration Section -->
+  <rect x="120" y="480" width="560" height="120" fill="#f9f9f9" rx="5"/>
+  <text x="130" y="505" font-family="Arial" font-size="16" fill="#555" font-weight="bold">WiFi Configuration</text>
+
+  <text x="130" y="530" font-family="Arial" font-size="13" fill="#666" font-weight="bold">Network Name (SSID):</text>
+  <rect x="130" y="535" width="540" height="30" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="555" font-family="Arial" font-size="13" fill="#333">MyHomeNetwork</text>
+
+  <text x="130" y="580" font-family="Arial" font-size="13" fill="#666" font-weight="bold">Password:</text>
+  <rect x="130" y="585" width="540" height="30" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="140" y="605" font-family="Arial" font-size="13" fill="#333">••••••••••••</text>
+
+  <!-- Connect Button -->
+  <rect x="120" y="610" width="560" height="40" fill="#4CAF50" rx="4"/>
+  <text x="400" y="635" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Connect to WiFi</text>
+</svg>

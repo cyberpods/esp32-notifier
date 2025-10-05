@@ -4,11 +4,12 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 
 ## What's New in v2.0
 
+- ✅ **WiFi Network Scanner** - Scan and select from available networks during setup
 - ✅ **WiFi Setup Mode** - Easy first-time setup via Access Point (no code editing needed!)
 - ✅ **System Logs** - Web-based log viewer for triggers, notifications, and errors
 - ✅ **Multi-input support** - Monitor up to 4 switches independently
 - ✅ **WiFi auto-reconnection** - Automatic recovery from network drops
-- ✅ **Watchdog timer** - Prevents system hangs
+- ✅ **Watchdog timer** - Prevents system hangs and auto-recovers from crashes
 - ✅ **Web authentication** - Password-protected configuration interface
 - ✅ **Non-blocking operations** - No more blocking delays
 - ✅ **Notification retry** - Failed notifications auto-retry up to 3 times
@@ -17,6 +18,13 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 - ✅ **Timezone dropdown** - Easy timezone selection
 - ✅ **ArduinoJson** - Secure JSON handling prevents injection attacks
 - ✅ **HTML encoding** - XSS protection
+
+### Recent Updates (Latest)
+
+- 🆕 **WiFi Scanner in AP Mode** - Click-to-select network scanner with signal strength indicators
+- 🐛 **Fixed AP Mode Issues** - Resolved WiFi reconnection attempts in Access Point mode
+- 🐛 **Fixed Watchdog Timer** - Proper initialization to prevent duplicate init errors
+- 🔒 **Improved Security** - Better SSID encoding for special characters in network names
 
 ## Hardware Requirements
 
@@ -46,13 +54,15 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 
 <table>
   <tr>
-    <td><img src="docs/wifi-setup.html" alt="WiFi Setup Mode" width="400"/><br/><i>WiFi Setup Mode (Access Point)</i></td>
-    <td><img src="docs/main-config.html" alt="Main Configuration" width="400"/><br/><i>Main Configuration Interface</i></td>
+    <td><img src="docs/images/wifi-setup.svg" alt="WiFi Setup Mode" width="400"/><br/><i>WiFi Setup Mode with Network Scanner</i></td>
+    <td><img src="docs/images/main-config.svg" alt="Main Configuration" width="400"/><br/><i>Main Configuration Interface</i></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/logs-viewer.html" alt="Logs Viewer" width="800"/><br/><i>System Logs Viewer</i></td>
+    <td colspan="2"><img src="docs/images/logs-viewer.svg" alt="Logs Viewer" width="800"/><br/><i>System Logs Viewer</i></td>
   </tr>
 </table>
+
+> 💡 **Note**: Interactive HTML versions available in [`docs/`](docs/) folder
 
 ### Wiring Diagrams
 
@@ -104,10 +114,12 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 4. Select your board:
    - Tools → Board → ESP32 Arduino → ESP32S3 Dev Module
 
-5. **IMPORTANT - Set Partition Scheme**:
-   - Tools → Partition Scheme → **"Huge APP (3MB No OTA/1MB SPIFFS)"**
-   - This is required because the sketch uses multiple notification services and web interface
-   - Without this setting, you'll get a "Sketch too big" compilation error
+5. **⚠️ CRITICAL - Set Partition Scheme ⚠️**:
+   - **YOU MUST CHANGE THIS OR COMPILATION WILL FAIL**
+   - Go to: Tools → Partition Scheme → **"Huge APP (3MB No OTA/1MB SPIFFS)"**
+   - ⚠️ **This is REQUIRED** - the sketch will NOT compile with the default partition scheme
+   - Without this setting, you'll get error: **"Sketch too big"** or **"text section exceeds available space"**
+   - **If you see compilation errors about size, check this setting first!**
 
 ### 3. Upload
 
@@ -123,11 +135,13 @@ A versatile IoT notification system that monitors **up to 4 switches** simultane
 1. The device creates a WiFi Access Point named `ESP32-Notifier-Setup`
 2. Connect to this network using password: `setup123`
 3. Open your browser and navigate to `http://192.168.4.1`
-4. Enter your WiFi network name (SSID) and password
-5. Click "Connect to WiFi"
-6. The device will restart and connect to your WiFi network
-7. Check the Serial Monitor for the new IP address (e.g., `192.168.1.100`)
-8. Navigate to that IP address to access the full configuration interface
+4. **NEW: Click "Scan for Networks"** to see all available WiFi networks with signal strength
+5. Click on any network to auto-fill the SSID, or manually enter your WiFi network name
+6. Enter your WiFi password
+7. Click "Connect to WiFi"
+8. The device will restart and connect to your WiFi network
+9. Check the Serial Monitor for the new IP address (e.g., `192.168.1.100`)
+10. Navigate to that IP address to access the full configuration interface
 
 **Default Settings:**
 - **Web Username:** `admin`
@@ -281,9 +295,11 @@ If you need to connect to a different WiFi network:
 ## Troubleshooting
 
 ### General Issues
-- **Compilation error "Sketch too big"**:
-  - Go to Tools → Partition Scheme → "Huge APP (3MB No OTA/1MB SPIFFS)"
-  - This is required for the sketch to fit in flash memory
+- **⚠️ Compilation error "Sketch too big" or "text section exceeds available space" ⚠️**:
+  - **THIS IS THE #1 ISSUE - CHECK PARTITION SCHEME FIRST!**
+  - Go to Tools → Partition Scheme → **"Huge APP (3MB No OTA/1MB SPIFFS)"**
+  - This setting is **MANDATORY** for the sketch to fit in flash memory
+  - The default partition scheme is too small and will always fail
 - **WiFi won't connect**: Check SSID and password in web interface or code
 - **Can't access web interface**: Check Serial Monitor for IP address; ensure you're on the same network
 - **Time shows incorrect**: Adjust GMT offset in web interface (e.g., -14400 for EDT, -18000 for EST, 3600 for CET)
