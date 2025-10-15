@@ -1,91 +1,158 @@
-<svg width="800" height="900" xmlns="http://www.w3.org/2000/svg">
-  <rect width="800" height="900" fill="#f0f0f0"/>
-  <rect x="50" y="30" width="700" height="840" fill="white" rx="8" stroke="#ddd" stroke-width="2"/>
+<svg width="800" height="1400" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="1400" fill="#f0f0f0"/>
+  <rect x="50" y="30" width="700" height="1340" fill="white" rx="8" stroke="#ddd" stroke-width="2"/>
 
   <!-- Header -->
-  <text x="400" y="70" font-family="Arial" font-size="24" fill="#333" text-anchor="middle" font-weight="bold">ESP32-Notifier v2.0</text>
+  <text x="400" y="70" font-family="Arial" font-size="24" fill="#333" text-anchor="middle" font-weight="bold">ESP32-Notifier v3.2</text>
 
   <!-- Status Bar -->
   <rect x="70" y="90" width="660" height="30" fill="#e7f3fe" rx="4"/>
   <rect x="70" y="90" width="4" height="30" fill="#2196F3"/>
-  <text x="80" y="110" font-family="Arial" font-size="12" fill="#333"><tspan font-weight="bold">Status:</tspan> WiFi:OK | IP:192.168.1.100 | Up:3245s | In1:L</text>
+  <text x="80" y="110" font-family="Arial" font-size="12" fill="#333"><tspan font-weight="bold">Status:</tspan> WiFi:OK | Cell:T-Mobile(25) | IP:192.168.1.100 | Temp:22.5°C</text>
 
-  <!-- WiFi Section -->
+  <!-- Board Configuration Section -->
   <rect x="70" y="140" width="660" height="100" fill="#f9f9f9" rx="5"/>
-  <text x="80" y="165" font-family="Arial" font-size="16" fill="#555" font-weight="bold">WiFi</text>
-  <text x="80" y="185" font-family="Arial" font-size="12" fill="#666" font-weight="bold">SSID:</text>
-  <rect x="80" y="190" width="640" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="207" font-family="Arial" font-size="12" fill="#333">MyHomeNetwork</text>
-  <rect x="80" y="220" width="150" height="25" fill="#f44336" rx="4"/>
-  <text x="155" y="237" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Reset WiFi</text>
+  <text x="80" y="165" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Board Configuration</text>
+  <text x="80" y="185" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Board Type:</text>
+  <rect x="80" y="190" width="300" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="207" font-family="Arial" font-size="12" fill="#333">ESP32-S3-SIM7670G-4G</text>
+  <rect x="390" y="190" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 392 197 L 395 200 L 403 192" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="410" y="202" font-family="Arial" font-size="12" fill="#333">Camera</text>
+  <rect x="490" y="190" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 492 197 L 495 200 L 503 192" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="510" y="202" font-family="Arial" font-size="12" fill="#333">GPS</text>
+  <text x="80" y="225" font-family="Arial" font-size="11" fill="#999">📷 Camera:Ready | 💾 SD:15GB | 🛰️ GPS:Fix(8 sats)</text>
 
-  <!-- Pushbullet Section -->
-  <rect x="70" y="260" width="660" height="90" fill="#f9f9f9" rx="5"/>
-  <text x="80" y="285" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Pushbullet</text>
+  <!-- Cellular Configuration Section -->
+  <rect x="70" y="260" width="660" height="110" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="285" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Cellular / 4G Configuration</text>
   <rect x="80" y="290" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
   <path d="M 82 297 L 85 300 L 93 292" stroke="#4CAF50" stroke-width="2" fill="none"/>
-  <text x="100" y="302" font-family="Arial" font-size="12" fill="#333">Enable</text>
-  <text x="80" y="322" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Token:</text>
-  <rect x="80" y="327" width="560" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="344" font-family="Arial" font-size="11" fill="#888">o.xxxxxxxxxxxxxxxxxxxxxx</text>
-  <rect x="650" y="327" width="70" height="25" fill="#FF9800" rx="4"/>
-  <text x="685" y="344" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Test</text>
+  <text x="100" y="302" font-family="Arial" font-size="12" fill="#333">Enable Cellular Modem</text>
+  <text x="80" y="322" font-family="Arial" font-size="12" fill="#666" font-weight="bold">APN:</text>
+  <rect x="80" y="327" width="640" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="344" font-family="Arial" font-size="12" fill="#333">fast.t-mobile.com</text>
+  <text x="80" y="360" font-family="Arial" font-size="11" fill="#4CAF50">📶 Cellular: Connected to T-Mobile (Signal: 25)</text>
+
+  <!-- BMP180 Sensor Section -->
+  <rect x="70" y="390" width="660" height="130" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="415" font-family="Arial" font-size="16" fill="#555" font-weight="bold">BMP180 Sensor (Temperature/Pressure)</text>
+  <rect x="80" y="420" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 82 427 L 85 430 L 93 422" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="100" y="432" font-family="Arial" font-size="12" fill="#333">Enable BMP180 Sensor</text>
+  <text x="80" y="452" font-family="Arial" font-size="12" fill="#666" font-weight="bold">SDA Pin:</text>
+  <rect x="150" y="447" width="100" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="160" y="464" font-family="Arial" font-size="12" fill="#333">21</text>
+  <text x="270" y="452" font-family="Arial" font-size="12" fill="#666" font-weight="bold">SCL Pin:</text>
+  <rect x="340" y="447" width="100" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="350" y="464" font-family="Arial" font-size="12" fill="#333">22</text>
+  <rect x="460" y="447" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 462 454 L 465 457 L 473 449" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="480" y="459" font-family="Arial" font-size="11" fill="#333">Include in notifications</text>
+  <text x="80" y="485" font-family="Arial" font-size="11" fill="#4CAF50">✓ Sensor: Initialized</text>
+  <text x="80" y="503" font-family="Arial" font-size="11" fill="#666">🌡️ Temp: 22.5°C/72.5°F | 🔽 Press: 1013.2hPa | ⛰️ Alt: 123m</text>
+
+  <!-- Pushbullet Section -->
+  <rect x="70" y="540" width="660" height="115" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="565" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Pushbullet</text>
+  <rect x="80" y="570" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 82 577 L 85 580 L 93 572" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="100" y="582" font-family="Arial" font-size="12" fill="#333">Enable</text>
+  <text x="80" y="602" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Token:</text>
+  <rect x="80" y="607" width="560" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="624" font-family="Arial" font-size="11" fill="#888">o.xxxxxxxxxxxxxxxxxxxxxx</text>
+  <rect x="650" y="607" width="70" height="25" fill="#FF9800" rx="4"/>
+  <text x="685" y="624" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Test</text>
+  <text x="80" y="645" font-family="Arial" font-size="11" fill="#666">Connection Mode:</text>
+  <rect x="180" y="632" width="200" height="20" fill="white" rx="3" stroke="#ddd" stroke-width="1"/>
+  <text x="190" y="647" font-family="Arial" font-size="11" fill="#333">WiFi with Cellular Backup</text>
 
   <!-- Email Section -->
-  <rect x="70" y="370" width="660" height="160" fill="#f9f9f9" rx="5"/>
-  <text x="80" y="395" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Email</text>
-  <rect x="80" y="400" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
-  <path d="M 82 407 L 85 410 L 93 402" stroke="#4CAF50" stroke-width="2" fill="none"/>
-  <text x="100" y="412" font-family="Arial" font-size="12" fill="#333">Enable</text>
+  <rect x="70" y="675" width="660" height="130" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="700" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Email</text>
+  <rect x="80" y="705" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 82 712 L 85 715 L 93 707" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="100" y="717" font-family="Arial" font-size="12" fill="#333">Enable</text>
 
-  <text x="80" y="432" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Server:</text>
-  <rect x="80" y="437" width="320" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="454" font-family="Arial" font-size="12" fill="#333">smtp.gmail.com</text>
+  <text x="80" y="737" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Server:</text>
+  <rect x="80" y="742" width="250" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="759" font-family="Arial" font-size="12" fill="#333">smtp.gmail.com</text>
 
-  <text x="410" y="432" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Port:</text>
-  <rect x="410" y="437" width="230" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="420" y="454" font-family="Arial" font-size="12" fill="#333">465</text>
+  <text x="340" y="737" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Port:</text>
+  <rect x="340" y="742" width="120" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="350" y="759" font-family="Arial" font-size="12" fill="#333">465</text>
 
-  <text x="80" y="477" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Email:</text>
-  <rect x="80" y="482" width="560" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="499" font-family="Arial" font-size="12" fill="#333">user@gmail.com</text>
-  <rect x="650" y="482" width="70" height="25" fill="#FF9800" rx="4"/>
-  <text x="685" y="499" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Test</text>
+  <rect x="470" y="742" width="170" height="25" fill="#FF9800" rx="4"/>
+  <text x="555" y="759" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Test</text>
 
-  <text x="80" y="522" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Recipient:</text>
-  <rect x="80" y="527" width="640" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="544" font-family="Arial" font-size="12" fill="#333">notify@example.com</text>
+  <text x="80" y="782" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Email:</text>
+  <rect x="80" y="787" width="640" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="804" font-family="Arial" font-size="12" fill="#333">user@gmail.com</text>
+
+  <!-- SMS Section -->
+  <rect x="70" y="825" width="660" height="90" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="850" font-family="Arial" font-size="16" fill="#555" font-weight="bold">SMS Settings</text>
+  <rect x="80" y="855" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 82 862 L 85 865 L 93 857" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="100" y="867" font-family="Arial" font-size="12" fill="#333">Enable SMS Notifications</text>
+  <text x="80" y="887" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Phone Number:</text>
+  <rect x="80" y="892" width="560" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="909" font-family="Arial" font-size="12" fill="#333">+1234567890</text>
+  <rect x="650" y="892" width="70" height="25" fill="#FF9800" rx="4"/>
+  <text x="685" y="909" font-family="Arial" font-size="12" fill="white" text-anchor="middle">Test</text>
 
   <!-- Input Configuration -->
-  <rect x="70" y="550" width="660" height="220" fill="#f9f9f9" rx="5"/>
-  <text x="80" y="575" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Inputs Configuration</text>
+  <rect x="70" y="935" width="660" height="280" fill="#f9f9f9" rx="5"/>
+  <text x="80" y="960" font-family="Arial" font-size="16" fill="#555" font-weight="bold">Inputs Configuration</text>
 
-  <rect x="80" y="585" width="640" height="170" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="90" y="610" font-family="Arial" font-size="14" fill="#333" font-weight="bold">Input 1</text>
-  <rect x="90" y="615" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
-  <path d="M 92 622 L 95 625 L 103 617" stroke="#4CAF50" stroke-width="2" fill="none"/>
-  <text x="110" y="627" font-family="Arial" font-size="12" fill="#333">Enabled</text>
+  <rect x="80" y="970" width="640" height="230" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="90" y="995" font-family="Arial" font-size="14" fill="#333" font-weight="bold">Input 1</text>
+  <rect x="90" y="1000" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 92 1007 L 95 1010 L 103 1002" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="110" y="1012" font-family="Arial" font-size="12" fill="#333">Enabled</text>
 
-  <text x="90" y="647" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Name:</text>
-  <rect x="90" y="652" width="620" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="100" y="669" font-family="Arial" font-size="12" fill="#333">Front Door Sensor</text>
+  <rect x="200" y="1000" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 202 1007 L 205 1010 L 213 1002" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="220" y="1012" font-family="Arial" font-size="11" fill="#333">Capture Photo</text>
 
-  <text x="90" y="692" font-family="Arial" font-size="12" fill="#666" font-weight="bold">GPIO Pin: 4   Mode: Toggle</text>
+  <rect x="340" y="1000" width="15" height="15" fill="white" stroke="#ddd" stroke-width="1"/>
+  <path d="M 342 1007 L 345 1010 L 353 1002" stroke="#4CAF50" stroke-width="2" fill="none"/>
+  <text x="360" y="1012" font-family="Arial" font-size="11" fill="#333">Include GPS</text>
 
-  <text x="90" y="717" font-family="Arial" font-size="12" fill="#666" font-weight="bold">ON Message:</text>
-  <rect x="90" y="722" width="620" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
-  <text x="100" y="739" font-family="Arial" font-size="11" fill="#333">🟢 Front door opened at {timestamp}</text>
+  <text x="90" y="1032" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Name:</text>
+  <rect x="90" y="1037" width="620" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="100" y="1054" font-family="Arial" font-size="12" fill="#333">Front Door Sensor</text>
+
+  <text x="90" y="1077" font-family="Arial" font-size="12" fill="#666" font-weight="bold">GPIO Pin:</text>
+  <rect x="170" y="1072" width="100" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="180" y="1089" font-family="Arial" font-size="12" fill="#333">21</text>
+
+  <text x="290" y="1077" font-family="Arial" font-size="12" fill="#666" font-weight="bold">Mode:</text>
+  <rect x="340" y="1072" width="150" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="350" y="1089" font-family="Arial" font-size="12" fill="#333">Toggle</text>
+
+  <text x="90" y="1117" font-family="Arial" font-size="12" fill="#666" font-weight="bold">ON Message:</text>
+  <rect x="90" y="1122" width="620" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="100" y="1139" font-family="Arial" font-size="11" fill="#333">🟢 Front door opened at {timestamp}</text>
+
+  <text x="90" y="1167" font-family="Arial" font-size="12" fill="#666" font-weight="bold">OFF Message:</text>
+  <rect x="90" y="1172" width="620" height="25" fill="white" rx="4" stroke="#ddd" stroke-width="1"/>
+  <text x="100" y="1189" font-family="Arial" font-size="11" fill="#333">🔴 Front door closed at {timestamp}</text>
 
   <!-- Buttons -->
-  <rect x="70" y="790" width="140" height="35" fill="#4CAF50" rx="4"/>
-  <text x="140" y="812" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Save</text>
+  <rect x="70" y="1235" width="140" height="35" fill="#4CAF50" rx="4"/>
+  <text x="140" y="1257" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Save</text>
 
-  <rect x="220" y="790" width="140" height="35" fill="#008CBA" rx="4"/>
-  <text x="290" y="812" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Refresh</text>
+  <rect x="220" y="1235" width="140" height="35" fill="#008CBA" rx="4"/>
+  <text x="290" y="1257" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Refresh</text>
 
-  <rect x="370" y="790" width="140" height="35" fill="#FF9800" rx="4"/>
-  <text x="440" y="812" font-family="Arial" font-size="14" fill="white" text-anchor="middle">View Logs</text>
+  <rect x="370" y="1235" width="140" height="35" fill="#FF9800" rx="4"/>
+  <text x="440" y="1257" font-family="Arial" font-size="14" fill="white" text-anchor="middle">View Logs</text>
 
-  <rect x="520" y="790" width="140" height="35" fill="#f44336" rx="4"/>
-  <text x="590" y="812" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Restart</text>
+  <rect x="520" y="1235" width="140" height="35" fill="#f44336" rx="4"/>
+  <text x="590" y="1257" font-family="Arial" font-size="14" fill="white" text-anchor="middle">Restart</text>
+
+  <!-- Footer -->
+  <text x="400" y="1300" font-family="Arial" font-size="10" fill="#999" text-anchor="middle">v3.2 with Board Config, Cellular, Camera, GPS, and BMP180 Sensor</text>
 </svg>

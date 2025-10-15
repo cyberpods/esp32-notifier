@@ -1,9 +1,32 @@
 /*
  * ESP32-Notifier
- * Version: 2.0
+ * Version: 3.2
  * Multi-channel notification system with web configuration
  *
- * New in v2.0:
+ * New in v3.2:
+ * - BMP180 temperature and pressure sensor support
+ * - Real-time environmental monitoring (temperature, pressure, altitude)
+ * - Configurable I2C pins for sensor connection
+ * - Automatic sensor data inclusion in notifications
+ * - Live sensor readings in web interface
+ *
+ * Features from v3.1:
+ * - Cellular/4G support with SIM7670G modem
+ * - Intelligent connection modes (WiFi Only, Cellular Only, WiFi+Cellular Backup)
+ * - SMS notifications via cellular modem
+ * - HTTP over cellular for Pushbullet and Telegram
+ * - Per-service connection mode configuration
+ * - Cellular status monitoring (operator, signal strength)
+ *
+ * Features from v3.0:
+ * - ESP32-S3-SIM7670G-4G board support
+ * - OV2640 camera integration with photo capture
+ * - GPS/GNSS positioning support
+ * - Photo attachments in notifications
+ * - SD card storage for photos
+ * - Board type selection
+ *
+ * Features from v2.0:
  * - Multi-input support (up to 4 switches)
  * - WiFi auto-reconnection
  * - Watchdog timer
@@ -20,18 +43,196 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <time.h>
-#include <ESP_Mail_Client.h>
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
 
-#define VERSION "2.0"
+// Fix for ESP32-S3-SIM7670G USB Serial issue - redirect to hardware UART
+// This board's USB CDC doesn't work properly, but hardware UART does
+#define Serial Serial0
+
+// Optional advanced libraries - will gracefully disable if not available
+// Comment out any line below if you don't have that library installed
+#define HAS_EMAIL_LIB
+#define HAS_CAMERA_LIB  // Temporarily disabled - may be causing boot issues
+#define HAS_GPS_LIB      // Temporarily disabled - may be causing boot issues
+#define HAS_BMP180_LIB   // BMP180 temperature and pressure sensor
+
+#ifdef HAS_EMAIL_LIB
+  #include <ESP_Mail_Client.h>
+#endif
+
+#ifdef HAS_CAMERA_LIB
+  #include "esp_camera.h"
+  #include <SD_MMC.h>
+  #include <SD.h>  // Alternative SPI-based SD library
+  #include <SPI.h>
+  #include <FS.h>
+#endif
+
+#ifdef HAS_GPS_LIB
+  #include <TinyGPSPlus.h>
+#endif
+
+#ifdef HAS_BMP180_LIB
+  #include <Wire.h>
+  #include <Adafruit_BMP085.h>  // Works with both BMP085 and BMP180
+#endif
+
+#define VERSION "3.2-BMP180"
 #define MAX_INPUTS 4
 #define WDT_TIMEOUT 30
+
+// Board type definitions
+#define BOARD_GENERIC 0
+#define BOARD_SIM7670G 1
+#define BOARD_FREENOVE_S3 2
+
+// Connection mode definitions
+#define CONN_WIFI_ONLY 0
+#define CONN_CELL_ONLY 1
+#define CONN_WIFI_CELL_BACKUP 2
+
+// SIM7670G modem pins
+// NOTE: GPIO 43/44 are Serial0 (used for debug output), so we use GPIO 17/18 instead
+// Modem pins based on Waveshare example
+#define MODEM_TX_PIN 17
+#define MODEM_RX_PIN 18
+#define MODEM_PWR_EN_PIN 33   // Power enable pin (CRITICAL - must be HIGH)
+#define MODEM_PWRKEY_PIN 41   // Power key pin
+#define MODEM_RESET_PIN 42    // Reset pin
+
+// Camera pin definitions for ESP32-S3-SIM7670G-4G (Waveshare)
+#define SIM7670G_CAM_PWDN    -1
+#define SIM7670G_CAM_RESET   -1
+#define SIM7670G_CAM_XCLK    34
+#define SIM7670G_CAM_SIOD    15
+#define SIM7670G_CAM_SIOC    16
+#define SIM7670G_CAM_Y9      14
+#define SIM7670G_CAM_Y8      13
+#define SIM7670G_CAM_Y7      12
+#define SIM7670G_CAM_Y6      11
+#define SIM7670G_CAM_Y5      10
+#define SIM7670G_CAM_Y4      9
+#define SIM7670G_CAM_Y3      8
+#define SIM7670G_CAM_Y2      7
+#define SIM7670G_CAM_VSYNC   36
+#define SIM7670G_CAM_HREF    35
+#define SIM7670G_CAM_PCLK    37
+
+// Camera pin definitions for Freenove ESP32-S3
+// Based on datasheet: GPIO11,9,8,10,12,18,17,16 for data
+#define FREENOVE_CAM_PWDN    -1
+#define FREENOVE_CAM_RESET   -1
+#define FREENOVE_CAM_XCLK    15
+#define FREENOVE_CAM_SIOD    4   // I2C SDA
+#define FREENOVE_CAM_SIOC    5   // I2C SCL
+#define FREENOVE_CAM_Y9      16
+#define FREENOVE_CAM_Y8      17
+#define FREENOVE_CAM_Y7      18
+#define FREENOVE_CAM_Y6      12
+#define FREENOVE_CAM_Y5      10
+#define FREENOVE_CAM_Y4      8
+#define FREENOVE_CAM_Y3      9
+#define FREENOVE_CAM_Y2      11
+#define FREENOVE_CAM_VSYNC   6
+#define FREENOVE_CAM_HREF    7
+#define FREENOVE_CAM_PCLK    13
+
+// Legacy pin definitions (for backward compatibility with existing code)
+// These will be set dynamically based on board type
+#define CAM_PIN_PWDN    SIM7670G_CAM_PWDN
+#define CAM_PIN_RESET   SIM7670G_CAM_RESET
+#define CAM_PIN_XCLK    SIM7670G_CAM_XCLK
+#define CAM_PIN_SIOD    SIM7670G_CAM_SIOD
+#define CAM_PIN_SIOC    SIM7670G_CAM_SIOC
+#define CAM_PIN_Y9      SIM7670G_CAM_Y9
+#define CAM_PIN_Y8      SIM7670G_CAM_Y8
+#define CAM_PIN_Y7      SIM7670G_CAM_Y7
+#define CAM_PIN_Y6      SIM7670G_CAM_Y6
+#define CAM_PIN_Y5      SIM7670G_CAM_Y5
+#define CAM_PIN_Y4      SIM7670G_CAM_Y4
+#define CAM_PIN_Y3      SIM7670G_CAM_Y3
+#define CAM_PIN_Y2      SIM7670G_CAM_Y2
+#define CAM_PIN_VSYNC   SIM7670G_CAM_VSYNC
+#define CAM_PIN_HREF    SIM7670G_CAM_HREF
+#define CAM_PIN_PCLK    SIM7670G_CAM_PCLK
+
+// SD card pins for ESP32-S3-SIM7670G-4G (Waveshare)
+#define SIM7670G_SD_CLK      5
+#define SIM7670G_SD_CMD      4
+#define SIM7670G_SD_DATA     6
+#define SIM7670G_SD_CD       46
+
+// SD card pins for Freenove ESP32-S3 (uses default SDMMC pins)
+#define FREENOVE_SD_CLK      39  // GPIO39
+#define FREENOVE_SD_CMD      38  // GPIO38
+#define FREENOVE_SD_DATA     40  // GPIO40
+#define FREENOVE_SD_CD       -1  // No card detect
+
+// Backward compatibility
+#define SD_MMC_CLK      SIM7670G_SD_CLK
+#define SD_MMC_CMD      SIM7670G_SD_CMD
+#define SD_MMC_DATA     SIM7670G_SD_DATA
+#define SD_CD_PIN       SIM7670G_SD_CD
+
+// GPS serial - using GNSS output from SIM7670G via AT commands
+// GPS data will be retrieved via AT+CGNSINF from the modem
 
 // Web server
 WebServer server(80);
 Preferences preferences;
-SMTPSession smtp;
+
+#ifdef HAS_EMAIL_LIB
+  SMTPSession* smtp = nullptr;  // Will be initialized when needed
+#endif
+
+// Board configuration
+int board_type = BOARD_GENERIC;
+bool camera_enabled = false;
+bool gps_enabled = false;
+bool sd_card_available = false;
+bool camera_initialized = false;
+
+#ifdef HAS_GPS_LIB
+  TinyGPSPlus* gps = nullptr;  // Will be initialized only if needed
+  HardwareSerial* GPS_Serial = nullptr;  // Will be initialized in setup()
+#endif
+
+// BMP180 sensor configuration
+#ifdef HAS_BMP180_LIB
+  Adafruit_BMP085* bmp = nullptr;  // Will be initialized only if needed
+#endif
+bool bmp180_enabled = false;
+bool bmp180_initialized = false;
+int bmp180_sda_pin = 21;  // Default I2C SDA pin
+int bmp180_scl_pin = 22;  // Default I2C SCL pin
+float last_temperature = 0.0;
+float last_pressure = 0.0;
+float last_altitude = 0.0;
+bool include_bmp180_in_notifications = true;  // Include sensor data in notifications by default
+
+// Cellular modem configuration
+HardwareSerial* ModemSerial = nullptr;  // Will be initialized in setup()
+bool cellular_enabled = false;
+bool cellular_connected = false;
+String cellular_operator = "";
+int cellular_signal_strength = 0;
+String apn = ""; // APN for cellular data
+String modem_model = "";
+String modem_imei = "";
+String modem_iccid = "";
+String modem_network_type = "";
+bool modem_initialized = false;
+
+// Connection modes per service
+int pushbullet_conn_mode = CONN_WIFI_ONLY;
+int email_conn_mode = CONN_WIFI_ONLY;
+int telegram_conn_mode = CONN_WIFI_ONLY;
+int sms_conn_mode = CONN_CELL_ONLY;
+
+// SMS configuration
+String sms_phone_number = "";
+bool sms_enabled = false;
 
 // WiFi state management
 enum WiFiState { WIFI_IDLE, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_FAILED };
@@ -86,6 +287,8 @@ struct InputConfig {
   int pin;
   bool enabled;
   bool momentary_mode;
+  bool capture_photo;  // NEW: Take photo when triggered
+  bool include_gps;    // NEW: Include GPS in notification
   String name;
   String message_on;
   String message_off;
@@ -95,11 +298,17 @@ struct InputConfig {
   unsigned long lastNotificationTime;
 };
 
+// Default pins to avoid conflicts:
+// - Modem uses: 17, 18, 41, 42
+// - Camera uses: 4-16, 34-37
+// - SD card uses: 4, 5, 6, 46
+// - Strapping pins (avoid): 0, 1, 2, 3, 45, 46
+// Safe GPIO pins for SIM7670G: 21, 38, 39, 40, 47, 48
 InputConfig inputs[MAX_INPUTS] = {
-  {4, true, false, "Input 1", "Input 1 ON at {timestamp}", "Input 1 OFF at {timestamp}", LOW, LOW, 0, 0},
-  {5, false, false, "Input 2", "Input 2 ON at {timestamp}", "Input 2 OFF at {timestamp}", LOW, LOW, 0, 0},
-  {6, false, false, "Input 3", "Input 3 ON at {timestamp}", "Input 3 OFF at {timestamp}", LOW, LOW, 0, 0},
-  {7, false, false, "Input 4", "Input 4 ON at {timestamp}", "Input 4 OFF at {timestamp}", LOW, LOW, 0, 0}
+  {21, true, false, false, false, "Input 1", "Input 1 ON at {timestamp}", "Input 1 OFF at {timestamp}", LOW, LOW, 0, 0},
+  {38, false, false, false, false, "Input 2", "Input 2 ON at {timestamp}", "Input 2 OFF at {timestamp}", LOW, LOW, 0, 0},
+  {39, false, false, false, false, "Input 3", "Input 3 ON at {timestamp}", "Input 3 OFF at {timestamp}", LOW, LOW, 0, 0},
+  {40, false, false, false, false, "Input 4", "Input 4 ON at {timestamp}", "Input 4 OFF at {timestamp}", LOW, LOW, 0, 0}
 };
 
 const unsigned long DEBOUNCE_DELAY = 50;
@@ -130,7 +339,44 @@ LogEntry logBuffer[MAX_LOG_ENTRIES];
 int logIndex = 0;
 int logCount = 0;
 
+// ========================================
+// FORWARD DECLARATIONS
+// ========================================
+
+// Core functions
+String getFormattedTime();
+void addLog(String level, String message);
+
+// Notification functions
+void sendNotifications(String title, String body, String photoFile = "");
+bool sendPushbulletNotification(String title, String body, String photoFile = "");
+bool sendEmailNotification(String subject, String body, String photoFile = "");
+bool sendTelegramNotification(String message, String photoFile = "");
+
+// Cellular functions
+bool sendSMS(String phoneNumber, String message);
+String sendHTTPRequest(String url, String method, String payload = "", String contentType = "application/json");
+
+// ========================================
+// IMPLEMENTATION
+// ========================================
+
 void addLog(String level, String message) {
+  // During early boot, just print to serial without complex operations
+  static bool earlyBoot = true;
+
+  if (earlyBoot) {
+    Serial.print(F("[EARLY-"));
+    Serial.print(level);
+    Serial.print(F("] "));
+    Serial.println(message);
+    Serial.flush();
+    // After first few calls, switch to normal mode
+    static int callCount = 0;
+    if (++callCount > 3) earlyBoot = false;
+    return;
+  }
+
   LogEntry entry;
   entry.timestamp = getFormattedTime();
   entry.level = level;
@@ -147,6 +393,7 @@ void addLog(String level, String message) {
   Serial.print(level);
   Serial.print(F("] "));
   Serial.println(message);
+  Serial.flush();
 }
 
 // Preference keys
@@ -169,31 +416,1377 @@ namespace PrefKeys {
   const char* NOTIF_TITLE = "notif_title";
   const char* GMT_OFFSET = "gmt_offset";
   const char* DAY_OFFSET = "day_offset";
+  // NEW: v3.0 preferences
+  const char* BOARD_TYPE = "board_type";
+  const char* CAMERA_EN = "camera_en";
+  const char* GPS_EN = "gps_en";
+  // NEW: v3.1 cellular preferences
+  const char* CELL_EN = "cell_en";
+  const char* APN = "apn";
+  const char* PB_CONN_MODE = "pb_conn";
+  const char* EMAIL_CONN_MODE = "email_conn";
+  const char* TG_CONN_MODE = "tg_conn";
+  const char* SMS_CONN_MODE = "sms_conn";
+  const char* SMS_EN = "sms_en";
+  const char* SMS_PHONE = "sms_phone";
+  // BMP180 sensor preferences
+  const char* BMP180_EN = "bmp180_en";
+  const char* BMP180_SDA = "bmp180_sda";
+  const char* BMP180_SCL = "bmp180_scl";
+  const char* BMP180_IN_NOTIF = "bmp180_notif";
 }
+
+// ========================================
+// CAMERA FUNCTIONS
+// ========================================
+
+#ifdef HAS_CAMERA_LIB
+bool initCamera() {
+  if (board_type == BOARD_GENERIC) {
+    addLog("INFO", "Camera not available - board type is generic");
+    return false;
+  }
+
+  Serial.println(F("Initializing OV2640 camera..."));
+  Serial.printf("Free heap before camera init: %d bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("PSRAM size: %d bytes\n", ESP.getPsramSize());
+    Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
+  }
+  Serial.flush();
+
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+
+  // Set camera pins based on board type
+  if (board_type == BOARD_SIM7670G) {
+    config.pin_d0 = SIM7670G_CAM_Y2;
+    config.pin_d1 = SIM7670G_CAM_Y3;
+    config.pin_d2 = SIM7670G_CAM_Y4;
+    config.pin_d3 = SIM7670G_CAM_Y5;
+    config.pin_d4 = SIM7670G_CAM_Y6;
+    config.pin_d5 = SIM7670G_CAM_Y7;
+    config.pin_d6 = SIM7670G_CAM_Y8;
+    config.pin_d7 = SIM7670G_CAM_Y9;
+    config.pin_xclk = SIM7670G_CAM_XCLK;
+    config.pin_pclk = SIM7670G_CAM_PCLK;
+    config.pin_vsync = SIM7670G_CAM_VSYNC;
+    config.pin_href = SIM7670G_CAM_HREF;
+    config.pin_sccb_sda = SIM7670G_CAM_SIOD;
+    config.pin_sccb_scl = SIM7670G_CAM_SIOC;
+    config.pin_pwdn = SIM7670G_CAM_PWDN;
+    config.pin_reset = SIM7670G_CAM_RESET;
+  } else if (board_type == BOARD_FREENOVE_S3) {
+    config.pin_d0 = FREENOVE_CAM_Y2;
+    config.pin_d1 = FREENOVE_CAM_Y3;
+    config.pin_d2 = FREENOVE_CAM_Y4;
+    config.pin_d3 = FREENOVE_CAM_Y5;
+    config.pin_d4 = FREENOVE_CAM_Y6;
+    config.pin_d5 = FREENOVE_CAM_Y7;
+    config.pin_d6 = FREENOVE_CAM_Y8;
+    config.pin_d7 = FREENOVE_CAM_Y9;
+    config.pin_xclk = FREENOVE_CAM_XCLK;
+    config.pin_pclk = FREENOVE_CAM_PCLK;
+    config.pin_vsync = FREENOVE_CAM_VSYNC;
+    config.pin_href = FREENOVE_CAM_HREF;
+    config.pin_sccb_sda = FREENOVE_CAM_SIOD;
+    config.pin_sccb_scl = FREENOVE_CAM_SIOC;
+    config.pin_pwdn = FREENOVE_CAM_PWDN;
+    config.pin_reset = FREENOVE_CAM_RESET;
+    config.xclk_freq_hz = 20000000;  // 20MHz for Freenove
+  } else {
+    // Default to SIM7670G pins if unknown board type
+    config.pin_d0 = CAM_PIN_Y2;
+    config.pin_d1 = CAM_PIN_Y3;
+    config.pin_d2 = CAM_PIN_Y4;
+    config.pin_d3 = CAM_PIN_Y5;
+    config.pin_d4 = CAM_PIN_Y6;
+    config.pin_d5 = CAM_PIN_Y7;
+    config.pin_d6 = CAM_PIN_Y8;
+    config.pin_d7 = CAM_PIN_Y9;
+    config.pin_xclk = CAM_PIN_XCLK;
+    config.pin_pclk = CAM_PIN_PCLK;
+    config.pin_vsync = CAM_PIN_VSYNC;
+    config.pin_href = CAM_PIN_HREF;
+    config.pin_sccb_sda = CAM_PIN_SIOD;
+    config.pin_sccb_scl = CAM_PIN_SIOC;
+    config.pin_pwdn = CAM_PIN_PWDN;
+    config.pin_reset = CAM_PIN_RESET;
+    config.xclk_freq_hz = 16000000;  // 16MHz default
+  }
+
+  if (board_type == BOARD_SIM7670G) {
+    config.xclk_freq_hz = 16000000;  // 16MHz for Waveshare
+  }
+
+  config.pixel_format = PIXFORMAT_JPEG;
+
+  // Conservative configuration to avoid DMA overflow and stack issues
+  // Start with small frame buffer and work up
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.frame_size = FRAMESIZE_VGA;  // Start small: 640x480
+  config.jpeg_quality = 15;  // Higher number = lower quality = less memory
+  config.fb_count = 1;  // Single buffer to minimize memory
+
+  if(psramFound()){
+    Serial.println(F("PSRAM found - using conservative settings to avoid overflow"));
+    Serial.printf("PSRAM size: %d, Free PSRAM: %d\n", ESP.getPsramSize(), ESP.getFreePsram());
+    // Use moderate settings - not maximum to avoid DMA overflow
+    config.frame_size = FRAMESIZE_SVGA;  // 800x600 (not UXGA to avoid overflow)
+    config.jpeg_quality = 12;
+    config.fb_count = 1;  // Stay with single buffer for stability
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  } else {
+    Serial.println(F("ERROR: No PSRAM detected!"));
+    Serial.println(F("This board REQUIRES PSRAM for camera operation"));
+    if (board_type == BOARD_FREENOVE_S3) {
+      Serial.println(F("Check Arduino IDE: Tools -> PSRAM -> OPI PSRAM"));
+    } else {
+      Serial.println(F("Check Arduino IDE: Tools -> PSRAM -> QSPI PSRAM"));
+    }
+    // Ultra-minimal settings without PSRAM
+    config.frame_size = FRAMESIZE_QVGA;  // 320x240 - very small
+    config.jpeg_quality = 20;
+    config.fb_location = CAMERA_FB_IN_DRAM;
+  }
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.print(F("Camera init failed: 0x"));
+    Serial.println(err, HEX);
+    addLog("ERROR", "Camera initialization failed: " + String(err, HEX));
+    return false;
+  }
+
+  addLog("SUCCESS", "Camera initialized successfully");
+  camera_initialized = true;
+  return true;
+}
+
+String capturePhoto() {
+  if (!camera_initialized || !camera_enabled) {
+    addLog("WARNING", "Camera not initialized or disabled");
+    return "";
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    addLog("ERROR", "Camera capture failed");
+    return "";
+  }
+
+  String filename = "";
+  if (sd_card_available) {
+    Serial.println(F("Capturing photo to SD card..."));
+    Serial.printf("Frame buffer size: %d bytes\n", fb->len);
+    Serial.flush();
+
+    // CRITICAL FIX: Camera operation disrupts SD_MMC peripheral
+    // Re-initialize SD card connection after getting frame buffer
+    Serial.println(F("Re-establishing SD card connection after camera capture..."));
+    SD_MMC.end();
+    delay(100);
+
+    if (!SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_DATA)) {
+      Serial.println(F("WARNING: setPins() failed during SD reinit"));
+    }
+
+    if (!SD_MMC.begin("/sdcard", true)) {
+      Serial.println(F("ERROR: SD card reinit failed after camera capture"));
+      addLog("ERROR", "SD card reinit failed after camera capture");
+      sd_card_available = false;
+      esp_camera_fb_return(fb);
+      return "";
+    }
+
+    Serial.println(F("SD card re-initialized successfully"));
+
+    // Generate filename with timestamp
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char fname[32];
+      strftime(fname, sizeof(fname), "/%Y%m%d_%H%M%S.jpg", &timeinfo);
+      filename = String(fname);
+
+      Serial.print(F("Attempting to create file: "));
+      Serial.println(filename);
+      Serial.flush();
+
+      // Check if SD card is still mounted
+      uint8_t cardType = SD_MMC.cardType();
+      if (cardType == CARD_NONE) {
+        Serial.println(F("ERROR: SD card no longer detected!"));
+        addLog("ERROR", "SD card was unmounted");
+        sd_card_available = false;
+        esp_camera_fb_return(fb);
+        return "";
+      }
+
+      // Try to open file with FILE_WRITE mode
+      Serial.println(F("Opening file with FILE_WRITE..."));
+      File file = SD_MMC.open(filename.c_str(), FILE_WRITE);
+      if (!file) {
+        // Try alternative: open with "w" mode
+        Serial.println(F("FILE_WRITE failed, trying with fopen mode..."));
+        file = SD_MMC.open(filename.c_str(), "w");
+      }
+
+      if (file) {
+        Serial.println(F("File opened successfully, writing data..."));
+        size_t written = file.write(fb->buf, fb->len);
+        file.close();
+        Serial.printf("Wrote %d bytes successfully\n", written);
+        addLog("SUCCESS", "Photo saved: " + filename + " (" + String(written) + " bytes)");
+      } else {
+        Serial.println(F("ERROR: Failed to open file on SD card"));
+        Serial.println(F("Trying to create test file to diagnose..."));
+
+        // Diagnostic test
+        File test = SD_MMC.open("/test2.txt", FILE_WRITE);
+        if (test) {
+          test.println("Test after photo attempt");
+          test.close();
+          Serial.println(F("Test file created OK - photo filename may be invalid"));
+          SD_MMC.remove("/test2.txt");
+        } else {
+          Serial.println(F("Test file also failed - SD card has become read-only"));
+        }
+
+        addLog("ERROR", "Failed to open file on SD card: " + filename);
+        filename = "";
+      }
+    } else {
+      Serial.println(F("ERROR: Could not get local time for filename"));
+      addLog("ERROR", "Could not get time for photo filename");
+    }
+  } else {
+    Serial.println(F("ERROR: SD card not available"));
+    addLog("ERROR", "SD card not available for photo storage");
+  }
+
+  esp_camera_fb_return(fb);
+  return filename;
+}
+#else
+// Stub functions when camera library is not available
+bool initCamera() {
+  addLog("INFO", "Camera library not available");
+  return false;
+}
+
+String capturePhoto() {
+  return "";
+}
+#endif
+
+// ========================================
+// SD CARD FUNCTIONS
+// ========================================
+
+#ifdef HAS_CAMERA_LIB
+bool initSDCard() {
+  if (board_type == BOARD_GENERIC) {
+    Serial.println(F("SD card not available - board type is generic"));
+    return false;
+  }
+
+  Serial.println(F("Initializing SD card..."));
+  Serial.printf("DEBUG: board_type = %d (0=Generic, 1=SIM7670G, 2=Freenove)\n", board_type);
+
+  // SD pins differ by board - set correct pins
+  int sd_clk, sd_cmd, sd_data, sd_cd;
+  if (board_type == BOARD_SIM7670G) {
+    Serial.println(F("SD card pins (Waveshare): CLK=5, CMD=4, DATA=6"));
+    sd_clk = SIM7670G_SD_CLK;
+    sd_cmd = SIM7670G_SD_CMD;
+    sd_data = SIM7670G_SD_DATA;
+    sd_cd = SIM7670G_SD_CD;
+  } else if (board_type == BOARD_FREENOVE_S3) {
+    Serial.println(F("SD card pins (Freenove): CLK=39, CMD=38, DATA=40"));
+    sd_clk = FREENOVE_SD_CLK;
+    sd_cmd = FREENOVE_SD_CMD;
+    sd_data = FREENOVE_SD_DATA;
+    sd_cd = FREENOVE_SD_CD;
+  } else {
+    // Default to SIM7670G pins
+    sd_clk = SD_MMC_CLK;
+    sd_cmd = SD_MMC_CMD;
+    sd_data = SD_MMC_DATA;
+    sd_cd = SD_CD_PIN;
+  }
+  Serial.flush();
+
+  // Check card detect pin if available
+  if (sd_cd >= 0) {
+    pinMode(sd_cd, INPUT_PULLUP);
+    delay(100);
+    int cardDetect = digitalRead(sd_cd);
+    Serial.print(F("Card detect pin (GPIO "));
+    Serial.print(sd_cd);
+    Serial.print(F(") state: "));
+    Serial.print(cardDetect);
+    Serial.print(F(" ("));
+    Serial.print(cardDetect == LOW ? "LOW - Card present?" : "HIGH - No card?");
+    Serial.println(F(")"));
+    Serial.println(F("NOTE: Card detect is optional - SD_MMC.begin() will try anyway"));
+    Serial.flush();
+  } else {
+    Serial.println(F("No card detect pin - skipping card detect check"));
+  }
+
+  // Give SD card time to power up
+  delay(500);
+
+  // Try to initialize SD card in 1-bit mode
+  Serial.println(F("Attempting SD_MMC.begin() in 1-bit mode..."));
+  Serial.flush();
+
+  // Method 1: Try SD_MMC (SDMMC peripheral - faster but less compatible)
+  Serial.println(F("Method 1: Trying SD_MMC library..."));
+  Serial.printf("DEBUG: board_type=%d, BOARD_FREENOVE_S3=%d\n", board_type, BOARD_FREENOVE_S3);
+  Serial.flush();
+
+  bool sdmmc_success = false;
+
+  // Freenove uses default SDMMC pins, try without setPins first
+  if (board_type == BOARD_FREENOVE_S3) {
+    Serial.println(F("DEBUG: Freenove board detected, trying default pins"));
+    Serial.println(F("  Trying default SDMMC pins (Freenove uses hardware defaults)..."));
+    if (SD_MMC.begin("/sdcard", true)) {
+      sdmmc_success = true;
+      Serial.println(F("  SD_MMC 1-bit mode SUCCESS with default pins!"));
+    } else {
+      Serial.println(F("  Default pins failed, trying setPins()..."));
+    }
+  }
+
+  // If not Freenove or default pins failed, try with explicit setPins
+  if (!sdmmc_success) {
+    Serial.printf("Setting SD pins: CLK=%d, CMD=%d, DATA=%d\n", sd_clk, sd_cmd, sd_data);
+    if (!SD_MMC.setPins(sd_clk, sd_cmd, sd_data)) {
+      Serial.println(F("WARNING: setPins() failed or not supported"));
+    }
+    Serial.flush();
+
+    // Try 1-bit mode
+    Serial.println(F("  Trying 1-bit mode..."));
+    if (SD_MMC.begin("/sdcard", true)) {
+      sdmmc_success = true;
+      Serial.println(F("  SD_MMC 1-bit mode SUCCESS!"));
+    } else {
+      Serial.println(F("  1-bit mode failed, trying 4-bit..."));
+      SD_MMC.end();
+      delay(500);
+
+      // Try 4-bit mode
+      if (SD_MMC.begin("/sdcard", false)) {
+        sdmmc_success = true;
+        Serial.println(F("  SD_MMC 4-bit mode SUCCESS!"));
+      } else {
+        Serial.println(F("  SD_MMC failed in both modes"));
+        SD_MMC.end();
+      }
+    }
+  }
+
+  // Method 2: If SD_MMC failed, try SPI mode with SD library
+  if (!sdmmc_success) {
+    Serial.println(F("Method 2: Trying SD library (SPI mode)..."));
+    Serial.println(F("NOTE: SPI mode uses different pins - this may not work on this board"));
+    Serial.flush();
+
+    // Use default SPI pins or try to use the SDMMC pins as SPI
+    // Note: This likely won't work as the hardware is designed for SDMMC mode
+    if (SD.begin(SD_MMC_CMD)) {  // Use CMD pin as CS
+      Serial.println(F("  SD SPI mode SUCCESS!"));
+      sd_card_available = true;
+
+      uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+      Serial.print(F("SD card (SPI mode) - Size: "));
+      Serial.print((uint32_t)cardSize);
+      Serial.println(F(" MB"));
+      return true;
+    } else {
+      Serial.println(F("  SD SPI mode failed"));
+      Serial.println(F(""));
+      Serial.println(F("SD card initialization FAILED in all modes:"));
+      Serial.println(F("  - SD_MMC 1-bit mode: FAILED"));
+      Serial.println(F("  - SD_MMC 4-bit mode: FAILED"));
+      Serial.println(F("  - SD SPI mode: FAILED"));
+      Serial.println(F(""));
+      Serial.println(F("This indicates a hardware issue with the SD slot"));
+      sd_card_available = false;
+      return false;
+    }
+  }
+
+  Serial.println(F("SD_MMC.begin() succeeded!"));
+  Serial.flush();
+
+  uint8_t cardType = SD_MMC.cardType();
+  Serial.print(F("Card type: "));
+  Serial.println(cardType);
+  Serial.flush();
+
+  if (cardType == CARD_NONE) {
+    Serial.println(F("No SD card attached"));
+    Serial.println(F("System will continue without SD card"));
+    SD_MMC.end();  // Clean up
+    sd_card_available = false;
+    return false;
+  }
+
+  // Get card size safely
+  uint64_t cardSize = 0;
+  if (cardType != CARD_NONE) {
+    cardSize = SD_MMC.cardSize() / (1024 * 1024);
+  }
+
+  Serial.print(F("SD card initialized - Size: "));
+  Serial.print((uint32_t)cardSize);
+  Serial.println(F(" MB"));
+
+  // Test write capability
+  Serial.println(F("Testing SD card write capability..."));
+  File testFile = SD_MMC.open("/test.txt", FILE_WRITE);
+  if (testFile) {
+    testFile.println("SD card write test");
+    testFile.close();
+    Serial.println(F("Write test SUCCESS - SD card is writable"));
+    SD_MMC.remove("/test.txt");  // Clean up test file
+    addLog("SUCCESS", "SD card initialized - Size: " + String((uint32_t)cardSize) + " MB");
+    sd_card_available = true;
+    return true;
+  } else {
+    Serial.println(F("Write test FAILED - SD card is READ-ONLY or write-protected"));
+    Serial.println(F("Check: Physical write-protect switch on SD card"));
+    addLog("ERROR", "SD card is read-only or write-protected");
+    sd_card_available = false;
+    return false;
+  }
+}
+#else
+// Stub function when camera library (with SD_MMC) is not available
+bool initSDCard() {
+  Serial.println(F("SD card library not available"));
+  return false;
+}
+#endif
+
+// ========================================
+// CELLULAR MODEM FUNCTIONS
+// ========================================
+
+String sendATCommand(String command, unsigned long timeout = 1000) {
+  if (ModemSerial == nullptr) return "ERROR: Modem not initialized";
+
+  // Clear any pending data
+  while (ModemSerial->available()) {
+    ModemSerial->read();
+  }
+
+  // Send command character-by-character with delays (like Waveshare example)
+  // This is CRITICAL for SIM7670G modem to properly receive commands
+  for (size_t i = 0; i < command.length(); i++) {
+    ModemSerial->write(command[i]);
+    delay(10);
+  }
+
+  // Send line ending
+  ModemSerial->write('\r');
+  delay(10);
+  ModemSerial->write('\n');
+  delay(10);
+  ModemSerial->flush();
+
+  String response = "";
+  unsigned long startTime = millis();
+  bool gotResponse = false;
+
+  while (millis() - startTime < timeout) {
+    if (ModemSerial->available()) {
+      char c = ModemSerial->read();
+      response += c;
+      gotResponse = true;
+    }
+    // Check for completion
+    if (response.indexOf("OK") >= 0 || response.indexOf("ERROR") >= 0) {
+      break;
+    }
+    // Small delay to allow data to arrive
+    if (!gotResponse) {
+      delay(10);
+    }
+  }
+
+  // Debug output
+  Serial.print(F("AT: "));
+  Serial.print(command);
+  Serial.print(F(" -> ["));
+  Serial.print(response.length());
+  Serial.print(F(" bytes] "));
+  if (response.length() > 0) {
+    // Print first 100 chars of response
+    Serial.println(response.length() > 100 ? response.substring(0, 100) + "..." : response);
+  } else {
+    Serial.println(F("(empty)"));
+  }
+
+  return response;
+}
+
+bool initModem() {
+  Serial.println(F("[MODEM] initModem() called"));
+  Serial.flush();
+
+  if (board_type != BOARD_SIM7670G) {
+    Serial.println(F("[MODEM] Board is not SIM7670G, skipping"));
+    Serial.flush();
+    addLog("INFO", "Cellular modem not available - board type is generic");
+    return false;
+  }
+
+  // Initialize modem serial object if not already done
+  Serial.println(F("[MODEM] Creating HardwareSerial object..."));
+  Serial.flush();
+  if (ModemSerial == nullptr) {
+    ModemSerial = new HardwareSerial(2);  // UART2
+    Serial.println(F("[MODEM] HardwareSerial created"));
+    Serial.flush();
+  }
+
+  // CRITICAL: Enable modem power (pin 33 must be HIGH) - like Waveshare example
+  Serial.println(F("[MODEM] Enabling modem power on pin 33..."));
+  Serial.flush();
+  pinMode(MODEM_PWR_EN_PIN, OUTPUT);
+  digitalWrite(MODEM_PWR_EN_PIN, HIGH);
+  Serial.println(F("[MODEM] Pin 33 set HIGH - modem power enabled"));
+  Serial.flush();
+
+  // Initialize modem serial BEFORE power sequence
+  // NOTE: In HardwareSerial, the parameter order is: baud, mode, rxPin, txPin (ESP32 perspective)
+  // ESP32 RX=17 connects to Modem TX
+  // ESP32 TX=18 connects to Modem RX
+  // Our pin names are from MODEM perspective, so we need to swap them!
+  Serial.printf("[MODEM] Initializing serial: ESP32 RX=17 (modem TX), ESP32 TX=18 (modem RX) at 115200 baud...\n");
+  Serial.flush();
+  ModemSerial->begin(115200, SERIAL_8N1, MODEM_TX_PIN, MODEM_RX_PIN);  // Swapped because pin names are from modem perspective!
+  delay(100);
+  Serial.println(F("[MODEM] Serial port opened"));
+  Serial.flush();
+
+  // Give modem time to power up after enabling pin 33
+  Serial.println(F("[MODEM] Waiting for modem to power up..."));
+  Serial.flush();
+  delay(3000);  // Wait for modem to stabilize
+  Serial.println(F("[MODEM] Power-up wait complete"));
+  Serial.flush();
+
+  // Test AT communication with multiple attempts and diagnostics
+  Serial.println(F("[MODEM] Testing AT communication..."));
+  Serial.flush();
+
+  // First check if modem is sending anything
+  Serial.println(F("[MODEM] Checking for any data from modem..."));
+  delay(500);
+  if (ModemSerial->available()) {
+    Serial.print(F("[MODEM] Data available: "));
+    while (ModemSerial->available()) {
+      Serial.write(ModemSerial->read());
+    }
+    Serial.println();
+  } else {
+    Serial.println(F("[MODEM] No data from modem (yet)"));
+  }
+  Serial.flush();
+
+  bool modemResponded = false;
+
+  for (int i = 0; i < 5 && !modemResponded; i++) {
+    Serial.printf("[MODEM] AT test attempt %d/5\n", i + 1);
+    Serial.flush();
+
+    String response = sendATCommand("AT", 2000);  // Longer timeout
+    if (response.indexOf("OK") >= 0 || response.indexOf("AT") >= 0) {
+      Serial.println(F("[MODEM] Modem responded!"));
+      Serial.flush();
+      addLog("SUCCESS", "Modem initialized");
+      modemResponded = true;
+
+      // Send AT again to stabilize
+      sendATCommand("AT");
+      delay(100);
+
+      // Configure modem
+      Serial.println(F("[MODEM] Configuring modem..."));
+      Serial.flush();
+      sendATCommand("ATE0");  // Echo off
+      delay(100);
+      sendATCommand("AT+CMEE=2");  // Verbose error messages
+      delay(100);
+
+      // Get modem information for diagnostics
+      String modelResponse = sendATCommand("AT+CGMM");
+      if (modelResponse.indexOf("OK") >= 0) {
+        int start = modelResponse.indexOf("\n") + 1;
+        int end = modelResponse.indexOf("\r", start);
+        if (start > 0 && end > start) {
+          modem_model = modelResponse.substring(start, end);
+          modem_model.trim();
+        }
+      }
+
+      String imeiResponse = sendATCommand("AT+CGSN");
+      if (imeiResponse.indexOf("OK") >= 0) {
+        int start = imeiResponse.indexOf("\n") + 1;
+        int end = imeiResponse.indexOf("\r", start);
+        if (start > 0 && end > start) {
+          modem_imei = imeiResponse.substring(start, end);
+          modem_imei.trim();
+        }
+      }
+
+      String iccidResponse = sendATCommand("AT+CCID");
+      if (iccidResponse.indexOf("+CCID:") >= 0) {
+        int start = iccidResponse.indexOf(":") + 2;
+        int end = iccidResponse.indexOf("\r", start);
+        if (start > 1 && end > start) {
+          modem_iccid = iccidResponse.substring(start, end);
+          modem_iccid.trim();
+        }
+      }
+
+      Serial.println(F("[MODEM] Configuration complete"));
+      Serial.flush();
+      modem_initialized = true;
+
+      return true;
+    }
+    delay(1000);
+  }
+
+  // If normal configuration didn't work, try different baud rates
+  if (!modemResponded) {
+    Serial.println(F("[MODEM] Standard 115200 baud failed, trying other baud rates..."));
+    Serial.flush();
+
+    // Common modem baud rates to try
+    uint32_t baudRates[] = {9600, 19200, 38400, 57600, 115200, 460800, 921600};
+
+    for (int b = 0; b < 7 && !modemResponded; b++) {
+      if (baudRates[b] == 115200) continue;  // Already tried this one
+
+      Serial.printf("[MODEM] Trying baud rate: %d\n", baudRates[b]);
+      ModemSerial->end();
+      delay(100);
+      ModemSerial->begin(baudRates[b], SERIAL_8N1, MODEM_TX_PIN, MODEM_RX_PIN);
+      delay(500);
+
+      for (int i = 0; i < 2 && !modemResponded; i++) {
+        String response = sendATCommand("AT", 2000);
+        if (response.indexOf("OK") >= 0 || response.indexOf("AT") >= 0) {
+          Serial.printf("[MODEM] SUCCESS at %d baud!\n", baudRates[b]);
+          addLog("SUCCESS", String("Modem initialized at ") + String(baudRates[b]) + " baud");
+          modemResponded = true;
+          break;
+        }
+        delay(500);
+      }
+    }
+  }
+
+  if (!modemResponded) {
+    Serial.println(F("[MODEM] Failed to get AT response at any baud rate"));
+    Serial.flush();
+    addLog("ERROR", "Modem initialization failed - no response at any baud rate");
+    return false;
+  }
+
+  // If we got here with modemResponded = true (from swapped pins), configure the modem
+  Serial.println(F("[MODEM] Configuring modem..."));
+  Serial.flush();
+
+  sendATCommand("AT");
+  delay(100);
+  sendATCommand("ATE0");  // Echo off
+  delay(100);
+  sendATCommand("AT+CMEE=2");  // Verbose error messages
+  delay(100);
+
+  // Get modem information for diagnostics
+  String modelResponse = sendATCommand("AT+CGMM");
+  if (modelResponse.indexOf("OK") >= 0) {
+    int start = modelResponse.indexOf("\n") + 1;
+    int end = modelResponse.indexOf("\r", start);
+    if (start > 0 && end > start) {
+      modem_model = modelResponse.substring(start, end);
+      modem_model.trim();
+    }
+  }
+
+  String imeiResponse = sendATCommand("AT+CGSN");
+  if (imeiResponse.indexOf("OK") >= 0) {
+    int start = imeiResponse.indexOf("\n") + 1;
+    int end = imeiResponse.indexOf("\r", start);
+    if (start > 0 && end > start) {
+      modem_imei = imeiResponse.substring(start, end);
+      modem_imei.trim();
+    }
+  }
+
+  String iccidResponse = sendATCommand("AT+CCID");
+  if (iccidResponse.indexOf("+CCID:") >= 0) {
+    int start = iccidResponse.indexOf(":") + 2;
+    int end = iccidResponse.indexOf("\r", start);
+    if (start > 1 && end > start) {
+      modem_iccid = iccidResponse.substring(start, end);
+      modem_iccid.trim();
+    }
+  }
+
+  Serial.println(F("[MODEM] Configuration complete"));
+  Serial.flush();
+  modem_initialized = true;
+
+  return true;
+}
+
+bool connectCellular() {
+  if (!cellular_enabled || board_type != BOARD_SIM7670G) {
+    return false;
+  }
+
+  Serial.println(F("Connecting to cellular network..."));
+  addLog("INFO", "Connecting to cellular network");
+
+  // Check SIM card - give modem extra time to detect it
+  Serial.println(F("[CELLULAR] Checking SIM card status..."));
+  delay(2000);  // Wait for SIM to be detected
+
+  String response = sendATCommand("AT+CPIN?", 3000);
+
+  // Print detailed SIM status
+  Serial.print(F("[CELLULAR] SIM Status Response: "));
+  Serial.println(response);
+
+  if (response.indexOf("READY") >= 0) {
+    Serial.println(F("[CELLULAR] SIM card is READY"));
+  } else if (response.indexOf("SIM PIN") >= 0) {
+    Serial.println(F("[CELLULAR] SIM card requires PIN"));
+    addLog("ERROR", "SIM requires PIN code");
+    return false;
+  } else if (response.indexOf("SIM PUK") >= 0) {
+    Serial.println(F("[CELLULAR] SIM card is PUK locked"));
+    addLog("ERROR", "SIM is PUK locked");
+    return false;
+  } else if (response.indexOf("NOT INSERTED") >= 0 || response.indexOf("NOT READY") >= 0) {
+    Serial.println(F("[CELLULAR] SIM card not detected"));
+    addLog("ERROR", "No SIM card detected");
+    return false;
+  } else {
+    Serial.println(F("[CELLULAR] Unknown SIM status - may not be ready yet"));
+    addLog("ERROR", "SIM card not ready");
+    return false;
+  }
+
+  // Wait for network registration
+  for (int i = 0; i < 30; i++) {
+    response = sendATCommand("AT+CREG?");
+    if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
+      Serial.println(F("Network registered!"));
+      break;
+    }
+    delay(1000);
+    esp_task_wdt_reset();
+  }
+
+  // Get operator name
+  response = sendATCommand("AT+COPS?");
+  int opStart = response.indexOf("\",\"") + 3;
+  int opEnd = response.indexOf("\"", opStart);
+  if (opStart > 2 && opEnd > opStart) {
+    cellular_operator = response.substring(opStart, opEnd);
+  }
+
+  // Get signal strength
+  response = sendATCommand("AT+CSQ");
+  int rssiStart = response.indexOf(": ") + 2;
+  int rssiEnd = response.indexOf(",", rssiStart);
+  if (rssiStart > 1 && rssiEnd > rssiStart) {
+    cellular_signal_strength = response.substring(rssiStart, rssiEnd).toInt();
+  }
+
+  // Get network type (2G/3G/4G)
+  response = sendATCommand("AT+CPSI?");
+  if (response.indexOf("LTE") >= 0) {
+    modem_network_type = "4G LTE";
+  } else if (response.indexOf("WCDMA") >= 0 || response.indexOf("HSDPA") >= 0) {
+    modem_network_type = "3G";
+  } else if (response.indexOf("GSM") >= 0 || response.indexOf("GPRS") >= 0) {
+    modem_network_type = "2G";
+  } else {
+    modem_network_type = "Unknown";
+  }
+
+  // Configure APN
+  if (apn.length() > 0) {
+    sendATCommand("AT+CGDCONT=1,\"IP\",\"" + apn + "\"");
+  }
+
+  // Activate PDP context
+  response = sendATCommand("AT+CGACT=1,1", 5000);
+  if (response.indexOf("OK") >= 0) {
+    cellular_connected = true;
+    addLog("SUCCESS", "Cellular connected - " + cellular_operator + " (RSSI: " + String(cellular_signal_strength) + ")");
+    Serial.println(F("Cellular network connected!"));
+    return true;
+  }
+
+  addLog("ERROR", "Cellular connection failed");
+  return false;
+}
+
+bool sendSMS(String phoneNumber, String message) {
+  if (!cellular_connected) {
+    addLog("ERROR", "SMS: No cellular connection");
+    return false;
+  }
+
+  Serial.println(F("Sending SMS..."));
+
+  // Set SMS text mode
+  sendATCommand("AT+CMGF=1");
+
+  // Set recipient
+  ModemSerial->print("AT+CMGS=\"");
+  ModemSerial->print(phoneNumber);
+  ModemSerial->println("\"");
+  delay(500);
+
+  // Send message
+  ModemSerial->print(message);
+  ModemSerial->write(26);  // Ctrl+Z to send
+
+  String response = "";
+  unsigned long startTime = millis();
+  while (millis() - startTime < 10000) {
+    if (ModemSerial->available()) {
+      response += (char)ModemSerial->read();
+    }
+    if (response.indexOf("OK") >= 0) {
+      Serial.println(F("✓ SMS sent"));
+      addLog("SUCCESS", "SMS sent to " + phoneNumber);
+      return true;
+    }
+    if (response.indexOf("ERROR") >= 0) {
+      break;
+    }
+  }
+
+  Serial.println(F("✗ SMS failed"));
+  addLog("ERROR", "SMS send failed");
+  return false;
+}
+
+String sendHTTPRequest(String url, String method, String payload, String contentType) {
+  if (!cellular_connected) {
+    addLog("ERROR", "HTTP: No cellular connection");
+    return "";
+  }
+
+  Serial.print(F("HTTP "));
+  Serial.print(method);
+  Serial.print(F(" via cellular: "));
+  Serial.println(url);
+
+  // Initialize HTTP
+  sendATCommand("AT+HTTPTERM");  // Terminate any existing session
+  delay(500);
+  sendATCommand("AT+HTTPINIT");
+
+  // Set parameters
+  sendATCommand("AT+HTTPPARA=\"URL\",\"" + url + "\"");
+  sendATCommand("AT+HTTPPARA=\"CONTENT\",\"" + contentType + "\"");
+
+  int action = 0;  // GET
+  if (method == "POST") {
+    action = 1;
+    // Send data
+    sendATCommand("AT+HTTPDATA=" + String(payload.length()) + ",10000");
+    delay(500);
+    ModemSerial->print(payload);
+    delay(1000);
+  }
+
+  // Execute request
+  String response = sendATCommand("AT+HTTPACTION=" + String(action), 15000);
+  delay(2000);
+
+  // Read response
+  response = sendATCommand("AT+HTTPREAD", 5000);
+
+  // Terminate HTTP
+  sendATCommand("AT+HTTPTERM");
+
+  return response;
+}
+
+// ========================================
+// GPS FUNCTIONS
+// ========================================
+
+#ifdef HAS_GPS_LIB
+bool initGPS() {
+  if (board_type != BOARD_SIM7670G || !cellular_enabled) {
+    addLog("INFO", "GPS not available - board type is generic or modem not enabled");
+    return false;
+  }
+
+  // Initialize GPS object if needed
+  if (gps == nullptr) {
+    gps = new TinyGPSPlus();
+  }
+
+  // Enable GNSS power
+  sendATCommand("AT+CGNSPWR=1");
+  addLog("INFO", "GPS initialized via modem");
+  return true;
+}
+
+void updateGPS() {
+  // GPS data is retrieved on-demand via AT commands
+  // No continuous update needed
+}
+
+String getGPSLocation() {
+  if (!gps_enabled || board_type != BOARD_SIM7670G || !cellular_enabled) {
+    return "";
+  }
+
+  // Get GPS info from modem
+  String response = sendATCommand("AT+CGNSINF");
+
+  // Parse response: +CGNSINF: <GNSS run status>,<Fix status>,<UTC date & Time>,
+  //                  <Latitude>,<Longitude>,<MSL Altitude>,<Speed Over Ground>,
+  //                  <Course Over Ground>,<Fix Mode>,<Reserved1>,<HDOP>,<PDOP>,
+  //                  <VDOP>,<Reserved2>,<GPS Satellites in View>,<GNSS Satellites Used>,
+  //                  <GLONASS Satellites in View>,<Reserved3>,<C/N0 max>,<HPA>,<VPA>
+
+  int infoStart = response.indexOf("+CGNSINF: ") + 10;
+  if (infoStart < 10) return "GPS: No data";
+
+  String info = response.substring(infoStart);
+  int commas[25];
+  int commaCount = 0;
+
+  // Find all comma positions
+  for (int i = 0; i < info.length() && commaCount < 25; i++) {
+    if (info[i] == ',') {
+      commas[commaCount++] = i;
+    }
+  }
+
+  if (commaCount < 14) return "GPS: Parse error";
+
+  // Extract fix status (field 1)
+  String fixStatus = info.substring(commas[0] + 1, commas[1]);
+  if (fixStatus != "1") {
+    return "GPS: No fix";
+  }
+
+  // Extract latitude (field 3)
+  String lat = info.substring(commas[2] + 1, commas[3]);
+  // Extract longitude (field 4)
+  String lon = info.substring(commas[3] + 1, commas[4]);
+  // Extract altitude (field 5)
+  String alt = info.substring(commas[4] + 1, commas[5]);
+  // Extract satellites used (field 15)
+  String sats = info.substring(commas[14] + 1, commas[15]);
+
+  if (lat.length() == 0 || lon.length() == 0) {
+    return "GPS: No fix";
+  }
+
+  String loc = "Lat: " + lat + ", Lon: " + lon;
+  if (alt.length() > 0 && alt != "0") {
+    loc += ", Alt: " + alt + "m";
+  }
+  if (sats.length() > 0) {
+    loc += " (" + sats + " sats)";
+  }
+
+  return loc;
+}
+#else
+// Stub functions when GPS library is not available
+bool initGPS() {
+  addLog("INFO", "GPS library not available");
+  return false;
+}
+
+void updateGPS() {
+  // No-op
+}
+
+String getGPSLocation() {
+  return "";
+}
+#endif
+
+// ========================================
+// BMP180 SENSOR FUNCTIONS
+// ========================================
+
+#ifdef HAS_BMP180_LIB
+bool initBMP180() {
+  if (!bmp180_enabled) {
+    addLog("INFO", "BMP180 sensor disabled");
+    return false;
+  }
+
+  Serial.println(F("Initializing BMP180 sensor..."));
+  Serial.printf("I2C pins - SDA: GPIO%d, SCL: GPIO%d\n", bmp180_sda_pin, bmp180_scl_pin);
+
+  // Initialize I2C with custom pins
+  Wire.begin(bmp180_sda_pin, bmp180_scl_pin);
+  delay(100);
+
+  // Initialize BMP180 object if needed
+  if (bmp == nullptr) {
+    bmp = new Adafruit_BMP085();
+  }
+
+  // Try to initialize the sensor
+  if (!bmp->begin()) {
+    Serial.println(F("ERROR: Could not find BMP180 sensor!"));
+    Serial.println(F("Check wiring:"));
+    Serial.printf("  VCC -> 3.3V\n");
+    Serial.printf("  GND -> GND\n");
+    Serial.printf("  SDA -> GPIO%d\n", bmp180_sda_pin);
+    Serial.printf("  SCL -> GPIO%d\n", bmp180_scl_pin);
+    addLog("ERROR", "BMP180 sensor not found - check wiring");
+    bmp180_initialized = false;
+    return false;
+  }
+
+  Serial.println(F("✓ BMP180 sensor initialized successfully"));
+  addLog("SUCCESS", "BMP180 sensor initialized");
+  bmp180_initialized = true;
+
+  // Read initial values
+  updateBMP180();
+
+  return true;
+}
+
+void updateBMP180() {
+  if (!bmp180_initialized || !bmp180_enabled || bmp == nullptr) {
+    return;
+  }
+
+  // Read temperature in Celsius
+  last_temperature = bmp->readTemperature();
+
+  // Read pressure in Pascals (convert to hPa/mbar)
+  last_pressure = bmp->readPressure() / 100.0;
+
+  // Calculate altitude (meters) based on standard atmospheric pressure
+  last_altitude = bmp->readAltitude();
+
+  // Optional: Print to serial for debugging
+  // Serial.printf("BMP180 - Temp: %.1f°C, Pressure: %.1f hPa, Alt: %.1f m\n",
+  //               last_temperature, last_pressure, last_altitude);
+}
+
+String getBMP180Data() {
+  if (!bmp180_initialized || !bmp180_enabled) {
+    return "";
+  }
+
+  // Update readings
+  updateBMP180();
+
+  String data = "";
+  data += "Temperature: " + String(last_temperature, 1) + "°C";
+  data += ", Pressure: " + String(last_pressure, 1) + " hPa";
+  data += ", Altitude: " + String(last_altitude, 1) + " m";
+
+  return data;
+}
+
+String getBMP180DataFormatted() {
+  if (!bmp180_initialized || !bmp180_enabled) {
+    return "";
+  }
+
+  // Update readings
+  updateBMP180();
+
+  String data = "\n🌡️  Temperature: " + String(last_temperature, 1) + "°C / " + String(last_temperature * 9.0 / 5.0 + 32.0, 1) + "°F";
+  data += "\n🔽 Pressure: " + String(last_pressure, 1) + " hPa / " + String(last_pressure * 0.02953, 2) + " inHg";
+  data += "\n⛰️  Altitude: " + String(last_altitude, 1) + " m / " + String(last_altitude * 3.28084, 1) + " ft";
+
+  return data;
+}
+
+#else
+// Stub functions when BMP180 library is not available
+bool initBMP180() {
+  addLog("INFO", "BMP180 library not available");
+  return false;
+}
+
+void updateBMP180() {
+  // No-op
+}
+
+String getBMP180Data() {
+  return "";
+}
+
+String getBMP180DataFormatted() {
+  return "";
+}
+#endif
 
 void setup() {
   Serial.begin(115200);
+  delay(1000);  // Give serial time to initialize
   Serial.println(F("\n\n=== ESP32-Notifier v" VERSION " ==="));
+  Serial.println(F("[BOOT] Serial initialized"));
+  Serial.flush();
 
-  // Enable watchdog timer (new API for ESP32 Arduino Core 3.x)
-  esp_task_wdt_deinit();  // Deinitialize if already initialized
-  esp_task_wdt_config_t wdt_config = {
-    .timeout_ms = WDT_TIMEOUT * 1000,
-    .idle_core_mask = 0,
-    .trigger_panic = true
-  };
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);
-  Serial.println(F("Watchdog timer enabled (30s)"));
+  // Print memory before anything else
+  Serial.printf("[BOOT] Free Heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("[BOOT] Chip: %s Rev %d\n", ESP.getChipModel(), ESP.getChipRevision());
+  Serial.flush();
 
+  // Enable watchdog timer with compatibility for different ESP32 core versions
+  Serial.println(F("[BOOT] Initializing watchdog..."));
+  Serial.flush();
+  #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+    // ESP32 Arduino Core 3.x
+    esp_task_wdt_deinit();  // Deinitialize if already initialized
+    esp_task_wdt_config_t wdt_config = {
+      .timeout_ms = WDT_TIMEOUT * 1000,
+      .idle_core_mask = 0,
+      .trigger_panic = true
+    };
+    esp_task_wdt_init(&wdt_config);
+    esp_task_wdt_add(NULL);
+  #else
+    // ESP32 Arduino Core 2.x
+    esp_task_wdt_init(WDT_TIMEOUT, true);
+    esp_task_wdt_add(NULL);
+  #endif
+  Serial.println(F("[BOOT] Watchdog timer enabled (30s)"));
+  Serial.flush();
+
+  Serial.println(F("[BOOT] Loading preferences..."));
+  Serial.flush();
   loadPreferences();
+  Serial.println(F("[BOOT] Preferences loaded OK"));
+  Serial.flush();
+  delay(100);
+
+  // Initialize board-specific features
+  Serial.println(F("[BOOT] Checking board configuration..."));
+  Serial.flush();
+  delay(100);
+
+  Serial.print(F("[BOOT] Board type: "));
+  Serial.print(board_type);
+  Serial.println(F(" (0=Generic, 1=SIM7670G)"));
+  Serial.flush();
+  delay(100);
+
+  Serial.print(F("[BOOT] Cellular enabled: "));
+  Serial.print(cellular_enabled);
+  Serial.print(F(", Camera: "));
+  Serial.print(camera_enabled);
+  Serial.print(F(", GPS: "));
+  Serial.println(gps_enabled);
+  Serial.flush();
+  delay(100);
+
+  if (board_type == BOARD_SIM7670G) {
+    Serial.println(F("[BOOT] Board: ESP32-S3-SIM7670G-4G (Waveshare)"));
+    Serial.flush();
+    addLog("INFO", "Board type: ESP32-S3-SIM7670G-4G (Waveshare)");
+
+    // Initialize cellular modem first if enabled
+    // Uses UART on pins 17 (TX) and 18 (RX) based on Waveshare examples
+    if (cellular_enabled) {
+      Serial.println(F("[BOOT] Initializing cellular modem..."));
+      Serial.flush();
+      esp_task_wdt_reset();  // Reset watchdog before modem init
+
+      if (initModem()) {
+        Serial.println(F("[BOOT] Modem initialized successfully"));
+        Serial.flush();
+
+        // Try to connect to cellular network
+        if (connectCellular()) {
+          Serial.println(F("[BOOT] Cellular network connected"));
+          Serial.flush();
+        } else {
+          Serial.println(F("[BOOT] Cellular connection failed - continuing without cellular"));
+          Serial.flush();
+        }
+      } else {
+        Serial.println(F("[BOOT] Modem initialization failed - continuing without cellular"));
+        Serial.flush();
+      }
+    } else {
+      Serial.println(F("[BOOT] Cellular disabled, skipping modem"));
+      Serial.flush();
+    }
+
+    // Initialize SD card
+    Serial.println(F("[BOOT] Initializing SD card..."));
+    Serial.flush();
+    esp_task_wdt_reset();  // Reset watchdog before SD card init
+    if (initSDCard()) {
+      Serial.println(F("[BOOT] SD card ready"));
+      Serial.flush();
+    } else {
+      Serial.println(F("[BOOT] SD card init failed - continuing without SD"));
+      Serial.flush();
+    }
+
+    // Initialize camera if enabled
+    if (camera_enabled) {
+      Serial.println(F("[BOOT] Initializing camera..."));
+      Serial.flush();
+      esp_task_wdt_reset();  // Reset watchdog before camera init
+      if (initCamera()) {
+        Serial.println(F("[BOOT] Camera ready"));
+        Serial.flush();
+
+        // Camera initialization may affect SD_MMC - verify SD card is still accessible
+        Serial.println(F("[BOOT] Verifying SD card after camera init..."));
+        uint8_t cardType = SD_MMC.cardType();
+        if (cardType == CARD_NONE) {
+          Serial.println(F("[BOOT] WARNING: SD card unmounted after camera init"));
+          Serial.println(F("[BOOT] Reinitializing SD card..."));
+          // Try to reinit SD card
+          if (initSDCard()) {
+            Serial.println(F("[BOOT] SD card reinitialized successfully"));
+          } else {
+            Serial.println(F("[BOOT] SD card reinit failed - camera and SD may conflict"));
+          }
+        } else {
+          Serial.println(F("[BOOT] SD card still accessible after camera init"));
+        }
+      } else {
+        Serial.println(F("[BOOT] Camera init failed"));
+        Serial.flush();
+      }
+    } else {
+      Serial.println(F("[BOOT] Camera disabled, skipping"));
+      Serial.flush();
+    }
+
+    // Initialize GPS if enabled (requires modem)
+    if (gps_enabled && cellular_enabled) {
+      Serial.println(F("[BOOT] Initializing GPS..."));
+      Serial.flush();
+      esp_task_wdt_reset();  // Reset watchdog before GPS init
+      if (initGPS()) {
+        Serial.println(F("[BOOT] GPS ready"));
+        Serial.flush();
+      } else {
+        Serial.println(F("[BOOT] GPS init failed"));
+        Serial.flush();
+      }
+    } else {
+      Serial.println(F("[BOOT] GPS disabled or no cellular, skipping"));
+      Serial.flush();
+    }
+  } else if (board_type == BOARD_FREENOVE_S3) {
+    Serial.println(F("[BOOT] Board: Freenove ESP32-S3 CAM"));
+    Serial.flush();
+    addLog("INFO", "Board type: Freenove ESP32-S3 CAM");
+
+    // Freenove board has camera and SD card but no cellular modem
+    // Initialize SD card if camera is enabled
+    if (camera_enabled) {
+      Serial.println(F("[BOOT] Initializing SD card..."));
+      Serial.flush();
+      esp_task_wdt_reset();  // Reset watchdog
+      if (initSDCard()) {
+        Serial.println(F("[BOOT] SD card mounted"));
+        Serial.flush();
+      } else {
+        Serial.println(F("[BOOT] SD card init failed - continuing without SD"));
+        Serial.flush();
+      }
+
+      // Initialize camera
+      Serial.println(F("[BOOT] Initializing camera..."));
+      Serial.flush();
+      esp_task_wdt_reset();  // Reset watchdog before camera init
+      if (initCamera()) {
+        Serial.println(F("[BOOT] Camera ready"));
+        Serial.flush();
+
+        // Verify SD card after camera init
+        #ifdef HAS_CAMERA_LIB
+        Serial.println(F("[BOOT] Verifying SD card after camera init..."));
+        uint8_t cardType = SD_MMC.cardType();
+        if (cardType == CARD_NONE) {
+          Serial.println(F("[BOOT] WARNING: SD card unmounted after camera init"));
+          Serial.println(F("[BOOT] Reinitializing SD card..."));
+          if (initSDCard()) {
+            Serial.println(F("[BOOT] SD card reinitialized successfully"));
+          } else {
+            Serial.println(F("[BOOT] SD card reinit failed"));
+          }
+        } else {
+          Serial.println(F("[BOOT] SD card still accessible after camera init"));
+        }
+        #endif
+      } else {
+        Serial.println(F("[BOOT] Camera init failed"));
+        Serial.flush();
+      }
+    } else {
+      Serial.println(F("[BOOT] Camera disabled, skipping"));
+      Serial.flush();
+    }
+  } else {
+    Serial.println(F("[BOOT] Board: Generic ESP32-S3"));
+    Serial.flush();
+    addLog("INFO", "Board type: Generic ESP32-S3");
+  }
+
+  // Initialize BMP180 sensor if enabled (works on all board types)
+  if (bmp180_enabled) {
+    Serial.println(F("[BOOT] Initializing BMP180 sensor..."));
+    Serial.flush();
+    esp_task_wdt_reset();  // Reset watchdog before sensor init
+    if (initBMP180()) {
+      Serial.println(F("[BOOT] BMP180 sensor ready"));
+      Serial.flush();
+    } else {
+      Serial.println(F("[BOOT] BMP180 sensor init failed - continuing without sensor"));
+      Serial.flush();
+    }
+  } else {
+    Serial.println(F("[BOOT] BMP180 sensor disabled, skipping"));
+    Serial.flush();
+  }
 
   // Configure enabled input pins
+  Serial.println(F("[BOOT] Configuring input pins..."));
+  Serial.flush();
   for (int i = 0; i < MAX_INPUTS; i++) {
     if (inputs[i].enabled) {
       pinMode(inputs[i].pin, INPUT_PULLDOWN);
       inputs[i].lastState = digitalRead(inputs[i].pin);
-      Serial.print(F("Input "));
+      Serial.print(F("[BOOT] Input "));
       Serial.print(i + 1);
       Serial.print(F(" ("));
       Serial.print(inputs[i].name);
@@ -201,22 +1794,36 @@ void setup() {
       Serial.print(inputs[i].pin);
       Serial.print(F(": "));
       Serial.println(inputs[i].lastState ? F("HIGH") : F("LOW"));
+      Serial.flush();
     }
   }
 
   // Check if WiFi credentials are configured
+  Serial.println(F("[BOOT] Checking WiFi configuration..."));
+  Serial.flush();
   if (wifi_ssid.length() == 0) {
+    Serial.println(F("[BOOT] No WiFi credentials, starting AP mode"));
+    Serial.flush();
     startAccessPoint();
     addLog("INFO", "Started in AP mode - no WiFi credentials");
   } else {
+    Serial.printf("[BOOT] WiFi SSID configured: %s\n", wifi_ssid.c_str());
+    Serial.flush();
     connectWiFiNonBlocking();
   }
 
+  Serial.println(F("[BOOT] Setting up web server..."));
+  Serial.flush();
   setupWebServer();
   server.begin();
+  Serial.println(F("[BOOT] Web server started"));
+  Serial.flush();
 
+  Serial.printf("[BOOT] Free Heap at end: %d bytes\n", ESP.getFreeHeap());
+  Serial.flush();
   addLog("INFO", "System started - ESP32-Notifier v" VERSION);
-  Serial.println(F("Setup complete"));
+  Serial.println(F("[BOOT] === Setup complete ==="));
+  Serial.flush();
 }
 
 void loop() {
@@ -241,6 +1848,17 @@ void loop() {
     processRetryQueue();
   }
 
+  // Update GPS data if enabled
+  if (gps_enabled && board_type == BOARD_SIM7670G) {
+    updateGPS();
+  }
+
+  // Update BMP180 sensor data if enabled
+  // Read sensor every loop (sensor library handles timing internally)
+  if (bmp180_enabled && bmp180_initialized) {
+    updateBMP180();
+  }
+
   // Monitor all enabled inputs
   for (int i = 0; i < MAX_INPUTS; i++) {
     if (inputs[i].enabled) {
@@ -254,12 +1872,22 @@ void monitorInput(int index) {
   bool reading = digitalRead(input.pin);
 
   if (reading != input.currentState) {
+    Serial.print(F("[INPUT] Pin "));
+    Serial.print(input.pin);
+    Serial.print(F(" changed to "));
+    Serial.println(reading ? "HIGH" : "LOW");
     input.lastDebounceTime = millis();
     input.currentState = reading;
   }
 
   if ((millis() - input.lastDebounceTime) > DEBOUNCE_DELAY) {
     if (input.currentState != input.lastState) {
+      Serial.print(F("[INPUT] State confirmed for "));
+      Serial.print(input.name);
+      Serial.print(F(" (pin "));
+      Serial.print(input.pin);
+      Serial.print(F("): "));
+      Serial.println(input.currentState ? "HIGH" : "LOW");
       input.lastState = input.currentState;
 
       bool shouldNotify = false;
@@ -283,12 +1911,30 @@ void monitorInput(int index) {
           String timestamp = getFormattedTime();
           message.replace("{timestamp}", timestamp);
 
+          // Capture photo if enabled for this input
+          String photoFilename = "";
+          if (input.capture_photo && camera_enabled && camera_initialized) {
+            photoFilename = capturePhoto();
+            if (photoFilename.length() > 0) {
+              Serial.print(F("Photo captured: "));
+              Serial.println(photoFilename);
+            }
+          }
+
+          // Add GPS location if enabled for this input
+          if (input.include_gps && gps_enabled) {
+            String location = getGPSLocation();
+            if (location.length() > 0) {
+              message += "\n" + location;
+            }
+          }
+
           Serial.print(input.name);
           Serial.print(F(" state changed: "));
           Serial.println(message);
 
           addLog("INFO", "Trigger: " + input.name + " - " + (input.currentState == HIGH ? "HIGH" : "LOW"));
-          sendNotifications(notification_title, message);
+          sendNotifications(notification_title, message, photoFilename);
           input.lastNotificationTime = millis();
         } else {
           Serial.print(input.name);
@@ -338,7 +1984,12 @@ void updateWiFiConnection() {
     } else if (millis() - wifiConnectStart > WIFI_TIMEOUT) {
       wifiState = WIFI_FAILED;
       Serial.println(F("\nWiFi connection failed!"));
-      addLog("ERROR", "WiFi connection timeout");
+      addLog("ERROR", "WiFi connection timeout - falling back to AP mode");
+
+      // Fall back to Access Point mode so user can reconfigure
+      Serial.println(F("Falling back to Access Point mode..."));
+      WiFi.disconnect();
+      startAccessPoint();
     }
   }
 }
@@ -398,16 +2049,28 @@ String getFormattedTime() {
 }
 
 void loadPreferences() {
+  Serial.println(F("[PREF] Opening preferences namespace..."));
+  Serial.flush();
   preferences.begin("notifier", false);
+  Serial.println(F("[PREF] Namespace opened"));
+  Serial.flush();
 
+  Serial.println(F("[PREF] Loading WiFi credentials..."));
+  Serial.flush();
   wifi_ssid = preferences.getString(PrefKeys::WIFI_SSID, wifi_ssid);
   wifi_password = preferences.getString(PrefKeys::WIFI_PASS, wifi_password);
   web_username = preferences.getString(PrefKeys::WEB_USER, web_username);
   web_password = preferences.getString(PrefKeys::WEB_PASS, web_password);
+  Serial.println(F("[PREF] WiFi credentials loaded"));
+  Serial.flush();
 
+  Serial.println(F("[PREF] Loading Pushbullet config..."));
+  Serial.flush();
   pushbullet_token = preferences.getString(PrefKeys::PB_TOKEN, pushbullet_token);
   pushbullet_enabled = preferences.getBool(PrefKeys::PB_ENABLED, pushbullet_enabled);
 
+  Serial.println(F("[PREF] Loading email config..."));
+  Serial.flush();
   smtp_host = preferences.getString(PrefKeys::SMTP_HOST, smtp_host);
   smtp_port = preferences.getInt(PrefKeys::SMTP_PORT, smtp_port);
   smtp_email = preferences.getString(PrefKeys::SMTP_EMAIL, smtp_email);
@@ -415,16 +2078,74 @@ void loadPreferences() {
   recipient_email = preferences.getString(PrefKeys::RCPT_EMAIL, recipient_email);
   email_enabled = preferences.getBool(PrefKeys::EMAIL_ENABLED, email_enabled);
 
+  Serial.println(F("[PREF] Loading Telegram config..."));
+  Serial.flush();
   telegram_token = preferences.getString(PrefKeys::TG_TOKEN, telegram_token);
   telegram_chat_id = preferences.getString(PrefKeys::TG_CHAT, telegram_chat_id);
   telegram_enabled = preferences.getBool(PrefKeys::TG_ENABLED, telegram_enabled);
 
+  Serial.println(F("[PREF] Loading notification settings..."));
+  Serial.flush();
   notification_title = preferences.getString(PrefKeys::NOTIF_TITLE, notification_title);
   gmt_offset = preferences.getLong(PrefKeys::GMT_OFFSET, gmt_offset);
   daylight_offset = preferences.getInt(PrefKeys::DAY_OFFSET, daylight_offset);
 
+  Serial.println(F("[PREF] Loading board configuration..."));
+  Serial.flush();
+  // NEW: Load board configuration
+  board_type = preferences.getInt(PrefKeys::BOARD_TYPE, board_type);
+  Serial.print(F("[PREF] Board type loaded: "));
+  Serial.println(board_type);
+  Serial.flush();
+
+  camera_enabled = preferences.getBool(PrefKeys::CAMERA_EN, camera_enabled);
+  gps_enabled = preferences.getBool(PrefKeys::GPS_EN, gps_enabled);
+
+  Serial.println(F("[PREF] Loading cellular configuration..."));
+  Serial.flush();
+  // NEW: v3.1 Load cellular configuration
+  cellular_enabled = preferences.getBool(PrefKeys::CELL_EN, cellular_enabled);
+  apn = preferences.getString(PrefKeys::APN, apn);
+  pushbullet_conn_mode = preferences.getInt(PrefKeys::PB_CONN_MODE, pushbullet_conn_mode);
+  email_conn_mode = preferences.getInt(PrefKeys::EMAIL_CONN_MODE, email_conn_mode);
+  telegram_conn_mode = preferences.getInt(PrefKeys::TG_CONN_MODE, telegram_conn_mode);
+  sms_conn_mode = preferences.getInt(PrefKeys::SMS_CONN_MODE, sms_conn_mode);
+  sms_enabled = preferences.getBool(PrefKeys::SMS_EN, sms_enabled);
+  sms_phone_number = preferences.getString(PrefKeys::SMS_PHONE, sms_phone_number);
+
+  Serial.println(F("[PREF] Loading BMP180 sensor configuration..."));
+  Serial.flush();
+  // Load BMP180 sensor configuration
+  bmp180_enabled = preferences.getBool(PrefKeys::BMP180_EN, bmp180_enabled);
+  bmp180_sda_pin = preferences.getInt(PrefKeys::BMP180_SDA, bmp180_sda_pin);
+  bmp180_scl_pin = preferences.getInt(PrefKeys::BMP180_SCL, bmp180_scl_pin);
+  include_bmp180_in_notifications = preferences.getBool(PrefKeys::BMP180_IN_NOTIF, include_bmp180_in_notifications);
+
+  // Update input pin defaults based on board type before loading preferences
+  // This ensures SIM7670G board uses safe pins that don't conflict with peripherals
+  if (board_type == BOARD_SIM7670G) {
+    // Safe pins for SIM7670G: 21, 38, 39, 40 (avoid modem/camera/SD/strapping pins)
+    int safe_pins[MAX_INPUTS] = {21, 38, 39, 40};
+    for (int i = 0; i < MAX_INPUTS; i++) {
+      inputs[i].pin = safe_pins[i];
+    }
+    Serial.println(F("[PREF] Board is SIM7670G - using safe GPIO pins (21,38,39,40)"));
+  } else {
+    // Generic board can use standard pins
+    int generic_pins[MAX_INPUTS] = {1, 2, 3, 47};
+    for (int i = 0; i < MAX_INPUTS; i++) {
+      inputs[i].pin = generic_pins[i];
+    }
+    Serial.println(F("[PREF] Board is Generic - using standard GPIO pins (1,2,3,47)"));
+  }
+  Serial.flush();
+
+  Serial.println(F("[PREF] Loading input configurations..."));
+  Serial.flush();
   // Load input configurations
   for (int i = 0; i < MAX_INPUTS; i++) {
+    Serial.printf("[PREF] Loading input %d...\n", i);
+    Serial.flush();
     String prefix = "in" + String(i) + "_";
     inputs[i].enabled = preferences.getBool((prefix + "en").c_str(), inputs[i].enabled);
     inputs[i].pin = preferences.getInt((prefix + "pin").c_str(), inputs[i].pin);
@@ -432,10 +2153,16 @@ void loadPreferences() {
     inputs[i].name = preferences.getString((prefix + "name").c_str(), inputs[i].name);
     inputs[i].message_on = preferences.getString((prefix + "on").c_str(), inputs[i].message_on);
     inputs[i].message_off = preferences.getString((prefix + "off").c_str(), inputs[i].message_off);
+    // NEW: Load camera and GPS settings per input
+    inputs[i].capture_photo = preferences.getBool((prefix + "cam").c_str(), inputs[i].capture_photo);
+    inputs[i].include_gps = preferences.getBool((prefix + "gps").c_str(), inputs[i].include_gps);
   }
 
+  Serial.println(F("[PREF] Closing preferences..."));
+  Serial.flush();
   preferences.end();
-  Serial.println(F("Preferences loaded"));
+  Serial.println(F("[PREF] Preferences loaded successfully"));
+  Serial.flush();
 }
 
 void savePreferences() {
@@ -464,6 +2191,27 @@ void savePreferences() {
   preferences.putLong(PrefKeys::GMT_OFFSET, gmt_offset);
   preferences.putInt(PrefKeys::DAY_OFFSET, daylight_offset);
 
+  // NEW: Save board configuration
+  preferences.putInt(PrefKeys::BOARD_TYPE, board_type);
+  preferences.putBool(PrefKeys::CAMERA_EN, camera_enabled);
+  preferences.putBool(PrefKeys::GPS_EN, gps_enabled);
+
+  // NEW: v3.1 Save cellular configuration
+  preferences.putBool(PrefKeys::CELL_EN, cellular_enabled);
+  preferences.putString(PrefKeys::APN, apn);
+  preferences.putInt(PrefKeys::PB_CONN_MODE, pushbullet_conn_mode);
+  preferences.putInt(PrefKeys::EMAIL_CONN_MODE, email_conn_mode);
+  preferences.putInt(PrefKeys::TG_CONN_MODE, telegram_conn_mode);
+  preferences.putInt(PrefKeys::SMS_CONN_MODE, sms_conn_mode);
+  preferences.putBool(PrefKeys::SMS_EN, sms_enabled);
+  preferences.putString(PrefKeys::SMS_PHONE, sms_phone_number);
+
+  // Save BMP180 sensor configuration
+  preferences.putBool(PrefKeys::BMP180_EN, bmp180_enabled);
+  preferences.putInt(PrefKeys::BMP180_SDA, bmp180_sda_pin);
+  preferences.putInt(PrefKeys::BMP180_SCL, bmp180_scl_pin);
+  preferences.putBool(PrefKeys::BMP180_IN_NOTIF, include_bmp180_in_notifications);
+
   // Save input configurations
   for (int i = 0; i < MAX_INPUTS; i++) {
     String prefix = "in" + String(i) + "_";
@@ -473,6 +2221,9 @@ void savePreferences() {
     preferences.putString((prefix + "name").c_str(), inputs[i].name);
     preferences.putString((prefix + "on").c_str(), inputs[i].message_on);
     preferences.putString((prefix + "off").c_str(), inputs[i].message_off);
+    // NEW: Save camera and GPS settings per input
+    preferences.putBool((prefix + "cam").c_str(), inputs[i].capture_photo);
+    preferences.putBool((prefix + "gps").c_str(), inputs[i].include_gps);
   }
 
   preferences.end();
@@ -547,6 +2298,21 @@ void setupWebServer() {
     handleTestTelegram();
   });
 
+  // NEW v3.0: Camera test endpoint
+  server.on("/test/camera", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestCamera();
+  });
+
+  server.on("/test/input", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestInput();
+  });
+
   server.on("/logs", []() {
     if (!apMode && !server.authenticate(web_username.c_str(), web_password.c_str())) {
       return server.requestAuthentication();
@@ -560,6 +2326,55 @@ void setupWebServer() {
     }
     handleResetWiFi();
   });
+
+  server.on("/api/config", []() {
+    if (!apMode && !server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleGetConfig();
+  });
+
+  server.on("/gallery", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleGallery();
+  });
+
+  server.on("/api/photos", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handlePhotoList();
+  });
+
+  server.on("/photo", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handlePhotoDownload();
+  });
+
+  server.on("/cellular", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleCellularDiagnostics();
+  });
+
+  server.on("/api/cellular", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleCellularAPI();
+  });
+
+  server.on("/cellular/refresh", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleCellularRefresh();
+  });
 }
 
 void handleRoot() {
@@ -569,20 +2384,31 @@ void handleRoot() {
     return;
   }
 
-  String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>ESP32-Notifier v");
+  String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>ESP32-Notifier v");
   html += VERSION;
   html += F("</title><style>"
-  "body{font-family:Arial;margin:20px;background:#f0f0f0}.c{max-width:800px;margin:auto;background:#fff;padding:20px;border-radius:8px}"
-  "h1{color:#333}.s{margin:15px 0;padding:12px;background:#f9f9f9;border-radius:5px}.s h2{margin-top:0;color:#555;font-size:16px}"
-  "label{display:block;margin:8px 0 4px;font-weight:bold;color:#666;font-size:14px}input,textarea,select{width:100%;padding:6px;box-sizing:border-box;border:1px solid #ddd;border-radius:4px;font-size:13px}"
+  ":root{--bg:#f0f0f0;--card:#fff;--text:#333;--text2:#555;--text3:#666;--border:#ddd;--section:#f9f9f9;--status:#e7f3fe;--status-border:#2196F3}"
+  "body.dark{--bg:#1a1a1a;--card:#2d2d2d;--text:#e0e0e0;--text2:#b0b0b0;--text3:#909090;--border:#404040;--section:#252525;--status:#1e3a5f;--status-border:#4fc3f7}"
+  "body{font-family:Arial;margin:20px;background:var(--bg);color:var(--text);transition:all 0.3s}"
+  ".c{max-width:800px;margin:auto;background:var(--card);padding:20px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}"
+  "h1{color:var(--text);display:flex;justify-content:space-between;align-items:center}"
+  ".theme-toggle{background:none;border:2px solid var(--border);padding:6px 12px;cursor:pointer;border-radius:4px;font-size:18px;transition:all 0.3s}"
+  ".theme-toggle:hover{border-color:var(--text3);transform:scale(1.1)}"
+  ".s{margin:15px 0;padding:12px;background:var(--section);border-radius:5px;border:1px solid var(--border)}.s h2{margin-top:0;color:var(--text2);font-size:16px}"
+  "label{display:block;margin:8px 0 4px;font-weight:bold;color:var(--text3);font-size:14px}"
+  "input,textarea,select{width:100%;padding:6px;box-sizing:border-box;border:1px solid var(--border);border-radius:4px;font-size:13px;background:var(--card);color:var(--text)}"
   "input[type=checkbox]{width:auto;margin-right:6px}textarea{min-height:50px;font-family:monospace}"
-  "button{background:#4CAF50;color:#fff;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;margin:4px 4px 4px 0;font-size:13px}"
-  ".b1{background:#008CBA}.b2{background:#f44336}.b3{background:#FF9800}"
-  ".st{padding:8px;background:#e7f3fe;border-left:4px solid #2196F3;margin:10px 0;font-size:13px}"
-  ".inp{border:1px solid #ddd;padding:10px;margin:10px 0;background:#fff;border-radius:4px}"
-  "</style></head><body><div class='c'><h1>ESP32-Notifier v");
+  "button{background:#4CAF50;color:#fff;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;margin:4px 4px 4px 0;font-size:13px;transition:all 0.2s}"
+  "button:hover{opacity:0.9;transform:translateY(-1px)}"
+  ".b1{background:#008CBA}.b2{background:#f44336}.b3{background:#FF9800}.b4{background:#9C27B0}"
+  ".st{padding:8px;background:var(--status);border-left:4px solid var(--status-border);margin:10px 0;font-size:13px;border-radius:4px}"
+  ".inp{border:1px solid var(--border);padding:10px;margin:10px 0;background:var(--section);border-radius:4px}"
+  ".badge{display:inline-block;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:bold;margin-left:8px}"
+  ".badge.success{background:#4CAF50;color:#fff}.badge.error{background:#f44336;color:#fff}.badge.warning{background:#FF9800;color:#fff}"
+  "</style></head><body><div class='c'><h1><span>ESP32-Notifier v");
   html += VERSION;
-  html += F("</h1><div class='st' id='sb'><b>Status:</b> <span id='st'>Loading...</span></div>");
+  html += F("</span><button type='button' class='theme-toggle' onclick='toggleTheme()' title='Toggle Dark Mode'>🌓</button></h1>"
+  "<div class='st' id='sb'><b>Status:</b> <span id='st'>Loading...</span></div>");
 
   html += F("<form method='POST' action='/save'>");
 
@@ -600,12 +2426,143 @@ void handleRoot() {
   html += htmlEncode(web_password);
   html += F("'></div>");
 
+  // NEW v3.0: Board Configuration
+  html += F("<div class='s'><h2>Board Configuration</h2><label>Board Type:</label><select name='board_type'>");
+  html += F("<option value='0'");
+  if (board_type == BOARD_GENERIC) html += F(" selected");
+  html += F(">Generic ESP32-S3</option>");
+  html += F("<option value='1'");
+  if (board_type == BOARD_SIM7670G) html += F(" selected");
+  html += F(">ESP32-S3-SIM7670G-4G (Waveshare)</option>");
+  html += F("<option value='2'");
+  if (board_type == BOARD_FREENOVE_S3) html += F(" selected");
+  html += F(">Freenove ESP32-S3 CAM</option></select>");
+
+  // Camera and GPS options (only shown for SIM7670G board)
+  html += F("<div style='margin-top:10px'><label><input type='checkbox' name='camera_en' value='1'");
+  if (camera_enabled) html += F(" checked");
+  html += F(">Enable Camera (OV2640)</label>");
+  if (camera_enabled && camera_initialized) {
+    html += F("<button type='button' class='b3' onclick='testService(\"camera\")'>Test Camera</button>");
+  }
+  html += F("<label><input type='checkbox' name='gps_en' value='1'");
+  if (gps_enabled) html += F(" checked");
+  html += F(">Enable GPS/GNSS</label>");
+
+  // Status indicators
+  if (board_type == BOARD_SIM7670G) {
+    html += F("<p style='font-size:12px;margin-top:8px;color:#666'>");
+    if (camera_initialized) html += F("📷 Camera: Ready<br>");
+    if (sd_card_available) {
+      #ifdef HAS_CAMERA_LIB
+      uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
+      html += F("💾 SD Card: ");
+      html += String((uint32_t)cardSize);
+      html += F(" MB<br>");
+      #endif
+    }
+    #ifdef HAS_GPS_LIB
+    if (gps_enabled && gps != nullptr) {
+      html += F("🛰️ GPS: ");
+      html += gps->satellites.isValid() ? "Fix (" + String(gps->satellites.value()) + " sats)" : "Searching";
+    }
+    #endif
+    html += F("</p>");
+  }
+  html += F("</div></div>");
+
+  // NEW v3.1: Cellular/4G Configuration
+  if (board_type == BOARD_SIM7670G) {
+    html += F("<div class='s'><h2>Cellular / 4G Configuration</h2>");
+    html += F("<label><input type='checkbox' name='cell_en' value='1'");
+    if (cellular_enabled) html += F(" checked");
+    html += F(">Enable Cellular Modem</label>");
+    html += F("<label>APN (Access Point Name):</label><input name='apn' value='");
+    html += htmlEncode(apn);
+    html += F("' placeholder='e.g., internet, wholesale, etc.'>");
+
+    // Status indicators
+    html += F("<p style='font-size:12px;margin-top:8px;color:#666'>");
+    if (cellular_connected) {
+      html += F("📶 Cellular: Connected to ");
+      html += cellular_operator;
+      html += F(" (Signal: ");
+      html += String(cellular_signal_strength);
+      html += F(")<br>");
+    } else if (cellular_enabled) {
+      html += F("📶 Cellular: Disconnected<br>");
+    }
+    html += F("</p>");
+    html += F("</div>");
+  }
+
+  // BMP180 Sensor Configuration
+  html += F("<div class='s'><h2>BMP180 Sensor (Temperature/Pressure)</h2>");
+  html += F("<label><input type='checkbox' name='bmp180_en' value='1'");
+  if (bmp180_enabled) html += F(" checked");
+  html += F(">Enable BMP180 Sensor</label>");
+  html += F("<label>SDA Pin (I2C Data):</label><input type='number' name='bmp180_sda' value='");
+  html += String(bmp180_sda_pin);
+  html += F("' min='0' max='48'>");
+  html += F("<label>SCL Pin (I2C Clock):</label><input type='number' name='bmp180_scl' value='");
+  html += String(bmp180_scl_pin);
+  html += F("' min='0' max='48'>");
+  html += F("<label><input type='checkbox' name='bmp180_notif' value='1'");
+  if (include_bmp180_in_notifications) html += F(" checked");
+  html += F(">Include sensor data in notifications</label>");
+
+  // Status indicators
+  html += F("<p style='font-size:12px;margin-top:8px;color:#666'>");
+  if (bmp180_initialized) {
+    html += F("✓ Sensor: Initialized<br>");
+    html += F("🌡️ Temperature: ");
+    html += String(last_temperature, 1);
+    html += F("°C / ");
+    html += String(last_temperature * 9.0 / 5.0 + 32.0, 1);
+    html += F("°F<br>");
+    html += F("🔽 Pressure: ");
+    html += String(last_pressure, 1);
+    html += F(" hPa / ");
+    html += String(last_pressure * 0.02953, 2);
+    html += F(" inHg<br>");
+    html += F("⛰️ Altitude: ");
+    html += String(last_altitude, 1);
+    html += F(" m / ");
+    html += String(last_altitude * 3.28084, 1);
+    html += F(" ft");
+  } else if (bmp180_enabled) {
+    html += F("⚠️ Sensor not detected - check wiring");
+  } else {
+    html += F("Sensor disabled");
+  }
+  html += F("</p>");
+  html += F("<p style='font-size:11px;color:#999;margin-top:5px'>");
+  html += F("Default pins: SDA=21, SCL=22. Connect VCC to 3.3V and GND to GND.");
+  html += F("</p>");
+  html += F("</div>");
+
   // Pushbullet
   html += F("<div class='s'><h2>Pushbullet</h2><label><input type='checkbox' name='pb_enabled' value='1'");
   if (pushbullet_enabled) html += F(" checked");
   html += F(">Enable</label><label>Token:</label><input name='pb_token' value='");
   html += htmlEncode(pushbullet_token);
-  html += F("'><button type='button' class='b3' onclick='testService(\"pushbullet\")'>Test</button></div>");
+  html += F("'>");
+
+  // NEW v3.1: Connection mode selector
+  if (board_type == BOARD_SIM7670G && cellular_enabled) {
+    html += F("<label>Connection Mode:</label><select name='pb_conn_mode'>");
+    html += F("<option value='0'");
+    if (pushbullet_conn_mode == CONN_WIFI_ONLY) html += F(" selected");
+    html += F(">WiFi Only</option>");
+    html += F("<option value='1'");
+    if (pushbullet_conn_mode == CONN_CELL_ONLY) html += F(" selected");
+    html += F(">Cellular Only</option>");
+    html += F("<option value='2'");
+    if (pushbullet_conn_mode == CONN_WIFI_CELL_BACKUP) html += F(" selected");
+    html += F(">WiFi with Cellular Backup</option></select>");
+  }
+
+  html += F("<button type='button' class='b3' onclick='testService(\"pushbullet\")'>Test</button></div>");
 
   // Email
   html += F("<div class='s'><h2>Email</h2><label><input type='checkbox' name='email_enabled' value='1'");
@@ -620,7 +2577,23 @@ void handleRoot() {
   html += htmlEncode(smtp_password);
   html += F("'><label>Recipient:</label><input name='recipient_email' value='");
   html += htmlEncode(recipient_email);
-  html += F("'><button type='button' class='b3' onclick='testService(\"email\")'>Test</button></div>");
+  html += F("'>");
+
+  // NEW v3.1: Connection mode selector
+  if (board_type == BOARD_SIM7670G && cellular_enabled) {
+    html += F("<label>Connection Mode:</label><select name='email_conn_mode'>");
+    html += F("<option value='0'");
+    if (email_conn_mode == CONN_WIFI_ONLY) html += F(" selected");
+    html += F(">WiFi Only</option>");
+    html += F("<option value='1'");
+    if (email_conn_mode == CONN_CELL_ONLY) html += F(" selected");
+    html += F(">Cellular Only</option>");
+    html += F("<option value='2'");
+    if (email_conn_mode == CONN_WIFI_CELL_BACKUP) html += F(" selected");
+    html += F(">WiFi with Cellular Backup</option></select>");
+  }
+
+  html += F("<button type='button' class='b3' onclick='testService(\"email\")'>Test</button></div>");
 
   // Telegram
   html += F("<div class='s'><h2>Telegram</h2><label><input type='checkbox' name='tg_enabled' value='1'");
@@ -629,7 +2602,46 @@ void handleRoot() {
   html += htmlEncode(telegram_token);
   html += F("'><label>Chat ID:</label><input name='tg_chat' value='");
   html += htmlEncode(telegram_chat_id);
-  html += F("'><button type='button' class='b3' onclick='testService(\"telegram\")'>Test</button></div>");
+  html += F("'>");
+
+  // NEW v3.1: Connection mode selector
+  if (board_type == BOARD_SIM7670G && cellular_enabled) {
+    html += F("<label>Connection Mode:</label><select name='tg_conn_mode'>");
+    html += F("<option value='0'");
+    if (telegram_conn_mode == CONN_WIFI_ONLY) html += F(" selected");
+    html += F(">WiFi Only</option>");
+    html += F("<option value='1'");
+    if (telegram_conn_mode == CONN_CELL_ONLY) html += F(" selected");
+    html += F(">Cellular Only</option>");
+    html += F("<option value='2'");
+    if (telegram_conn_mode == CONN_WIFI_CELL_BACKUP) html += F(" selected");
+    html += F(">WiFi with Cellular Backup</option></select>");
+  }
+
+  html += F("<button type='button' class='b3' onclick='testService(\"telegram\")'>Test</button></div>");
+
+  // NEW v3.1: SMS Configuration
+  if (board_type == BOARD_SIM7670G && cellular_enabled) {
+    html += F("<div class='s'><h2>SMS Notifications</h2>");
+    html += F("<label><input type='checkbox' name='sms_en' value='1'");
+    if (sms_enabled) html += F(" checked");
+    html += F(">Enable SMS</label>");
+    html += F("<label>Phone Number:</label><input name='sms_phone' value='");
+    html += htmlEncode(sms_phone_number);
+    html += F("' placeholder='e.g., +15551234567'>");
+    html += F("<label>Connection Mode:</label><select name='sms_conn_mode'>");
+    html += F("<option value='0'");
+    if (sms_conn_mode == CONN_WIFI_ONLY) html += F(" selected");
+    html += F(">WiFi Only</option>");
+    html += F("<option value='1'");
+    if (sms_conn_mode == CONN_CELL_ONLY) html += F(" selected");
+    html += F(">Cellular Only</option>");
+    html += F("<option value='2'");
+    if (sms_conn_mode == CONN_WIFI_CELL_BACKUP) html += F(" selected");
+    html += F(">WiFi with Cellular Backup</option></select>");
+    html += F("<p style='font-size:12px;margin-top:8px;color:#666'>Note: SMS is sent via cellular modem. Messages are limited to 160 characters.</p>");
+    html += F("</div>");
+  }
 
   // Inputs
   html += F("<div class='s'><h2>Inputs Configuration</h2>");
@@ -662,7 +2674,37 @@ void handleRoot() {
     html += String(i);
     html += F("_off'>");
     html += htmlEncode(inputs[i].message_off);
-    html += F("</textarea></div>");
+    html += F("</textarea>");
+
+    // NEW v3.0: Camera and GPS options per input
+    if (board_type == BOARD_SIM7670G) {
+      html += F("<div style='margin-top:10px;padding-top:10px;border-top:1px solid #ddd'>");
+      html += F("<label><input type='checkbox' name='in");
+      html += String(i);
+      html += F("_cam' value='1'");
+      if (inputs[i].capture_photo) html += F(" checked");
+      html += F(">📷 Capture Photo on Trigger</label>");
+      html += F("<label><input type='checkbox' name='in");
+      html += String(i);
+      html += F("_gps' value='1'");
+      if (inputs[i].include_gps) html += F(" checked");
+      html += F(">🛰️ Include GPS Location</label>");
+      html += F("</div>");
+    }
+
+    // Manual testing section
+    if (inputs[i].enabled) {
+      html += F("<div style='margin-top:10px;padding-top:10px;border-top:1px solid #ddd'>");
+      html += F("<label>Current State: <span id='inp");
+      html += String(i);
+      html += F("_state' class='badge'>...</span></label>");
+      html += F("<button type='button' class='b3' onclick='testInput(");
+      html += String(i);
+      html += F(")'>🧪 Test Trigger</button>");
+      html += F("</div>");
+    }
+
+    html += F("</div>");
   }
   html += F("</div>");
 
@@ -711,15 +2753,43 @@ void handleRoot() {
   html += String(daylight_offset);
   html += F("'></div>");
 
-  html += F("<button type='submit'>Save</button><button type='button' class='b1' onclick='location.reload()'>Refresh</button>");
+  html += F("<button type='submit'>Save Configuration</button><button type='button' class='b1' onclick='location.reload()'>Refresh</button>");
   html += F("<button type='button' class='b3' onclick=\"location.href='/logs'\">View Logs</button>");
+
+  // Add photo gallery button if camera and SD card are available
+  if (camera_enabled && camera_initialized && sd_card_available) {
+    html += F("<button type='button' class='b4' onclick=\"location.href='/gallery'\">📷 Photo Gallery</button>");
+  }
+
+  html += F("<button type='button' class='b3' onclick='downloadConfig()'>💾 Backup Config</button>");
+
+  // Add cellular diagnostics button if board supports it
+  if (board_type == BOARD_SIM7670G) {
+    html += F("<button type='button' class='b4' onclick=\"location.href='/cellular'\">📶 Cellular Diagnostics</button>");
+  }
+
   html += F("<button type='button' class='b2' onclick=\"if(confirm('Restart?'))location.href='/restart'\">Restart</button></form></div>");
 
-  html += F("<script>function testService(s){fetch('/test/'+s).then(r=>r.text()).then(d=>alert(s+': '+d))}"
-  "fetch('/status').then(r=>r.json()).then(d=>{"
-  "let s='WiFi:'+(d.wifi?'OK':'NO')+' |IP:'+d.ip+' |Up:'+Math.floor(d.uptime/1000)+'s';"
-  "d.inputs.forEach((inp,i)=>{s+=' |In'+(i+1)+':'+(inp?'H':'L')});"
-  "document.getElementById('st').innerHTML=s});"
+  html += F("<script>"
+  "function toggleTheme(){document.body.classList.toggle('dark');localStorage.setItem('theme',document.body.classList.contains('dark')?'dark':'light')}"
+  "if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');"
+  "function testService(s){fetch('/test/'+s).then(r=>r.text()).then(d=>alert(s+': '+d)).catch(e=>alert('Error: '+e))}"
+  "function testInput(i){if(confirm('Trigger Input '+(i+1)+'?')){fetch('/test/input?id='+i).then(r=>r.text()).then(d=>alert(d)).catch(e=>alert('Error: '+e))}}"
+  "function downloadConfig(){fetch('/api/config').then(r=>r.json()).then(d=>{"
+  "const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});"
+  "const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;"
+  "a.download='esp32-notifier-config.json';a.click();URL.revokeObjectURL(url);"
+  "}).catch(e=>alert('Error downloading config: '+e))}"
+  "function updateStatus(){fetch('/status').then(r=>r.json()).then(d=>{"
+  "let s='WiFi:'+(d.wifi?'✓':'✗')+' |IP:'+d.ip+' |Up:'+Math.floor(d.uptime/1000)+'s';"
+  "if(d.heap)s+=' |Heap:'+Math.round(d.heap/1024)+'KB';"
+  "d.inputs.forEach((inp,i)=>{"
+  "s+=' |In'+(i+1)+':'+(inp?'H':'L');"
+  "const el=document.getElementById('inp'+i+'_state');"
+  "if(el){el.textContent=inp?'HIGH':'LOW';el.className='badge '+(inp?'warning':'success')}"
+  "});"
+  "document.getElementById('st').innerHTML=s}).catch(e=>console.error('Status update failed:',e))}"
+  "updateStatus();setInterval(updateStatus,5000);"
   "document.querySelector('[name=gmt_offset]').value='");
   html += String(gmt_offset);
   html += F("';</script></body></html>");
@@ -728,7 +2798,7 @@ void handleRoot() {
 }
 
 void handleWiFiSetup() {
-  String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
   "<title>ESP32-Notifier Setup</title><style>"
   "body{font-family:Arial;margin:20px;background:#f0f0f0}.c{max-width:600px;margin:auto;background:#fff;padding:20px;border-radius:8px}"
   "h1{color:#333;text-align:center}.s{margin:15px 0;padding:12px;background:#f9f9f9;border-radius:5px}"
@@ -853,6 +2923,52 @@ void handleSave() {
 
   if (server.hasArg("notif_title")) notification_title = server.arg("notif_title");
 
+  // NEW v3.0: Board configuration
+  if (server.hasArg("board_type")) {
+    int newBoardType = server.arg("board_type").toInt();
+    if (newBoardType != board_type) {
+      board_type = newBoardType;
+      // Board type changed - may need restart to re-initialize hardware
+      addLog("INFO", "Board type changed - restart recommended");
+    }
+  }
+  camera_enabled = server.hasArg("camera_en");
+  gps_enabled = server.hasArg("gps_en");
+
+  // NEW v3.1: Cellular configuration
+  cellular_enabled = server.hasArg("cell_en");
+  if (server.hasArg("apn")) apn = server.arg("apn");
+
+  // Connection modes per service
+  if (server.hasArg("pb_conn_mode")) pushbullet_conn_mode = server.arg("pb_conn_mode").toInt();
+  if (server.hasArg("email_conn_mode")) email_conn_mode = server.arg("email_conn_mode").toInt();
+  if (server.hasArg("tg_conn_mode")) telegram_conn_mode = server.arg("tg_conn_mode").toInt();
+  if (server.hasArg("sms_conn_mode")) sms_conn_mode = server.arg("sms_conn_mode").toInt();
+
+  // SMS configuration
+  sms_enabled = server.hasArg("sms_en");
+  if (server.hasArg("sms_phone")) sms_phone_number = server.arg("sms_phone");
+
+  // BMP180 sensor configuration
+  bool bmp180_was_enabled = bmp180_enabled;
+  int old_sda = bmp180_sda_pin;
+  int old_scl = bmp180_scl_pin;
+
+  bmp180_enabled = server.hasArg("bmp180_en");
+  if (server.hasArg("bmp180_sda")) bmp180_sda_pin = server.arg("bmp180_sda").toInt();
+  if (server.hasArg("bmp180_scl")) bmp180_scl_pin = server.arg("bmp180_scl").toInt();
+  include_bmp180_in_notifications = server.hasArg("bmp180_notif");
+
+  // Re-initialize sensor if settings changed
+  if (bmp180_enabled && (!bmp180_was_enabled || old_sda != bmp180_sda_pin || old_scl != bmp180_scl_pin)) {
+    addLog("INFO", "BMP180 settings changed - reinitializing sensor");
+    bmp180_initialized = false;
+    initBMP180();
+  } else if (!bmp180_enabled && bmp180_was_enabled) {
+    addLog("INFO", "BMP180 sensor disabled");
+    bmp180_initialized = false;
+  }
+
   bool timeChanged = false;
   if (server.hasArg("gmt_offset")) {
     long newOffset = server.arg("gmt_offset").toInt();
@@ -912,6 +3028,10 @@ void handleSave() {
       inputs[i].message_off = server.arg((prefix + "off").c_str());
     }
 
+    // NEW v3.0: Handle camera and GPS per input
+    inputs[i].capture_photo = server.hasArg((prefix + "cam").c_str());
+    inputs[i].include_gps = server.hasArg((prefix + "gps").c_str());
+
     // Handle enable/disable state changes
     if (!wasEnabled && inputs[i].enabled) {
       pinMode(inputs[i].pin, INPUT_PULLDOWN);
@@ -926,10 +3046,21 @@ void handleSave() {
 }
 
 void handleStatus() {
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<768> doc;
   doc["wifi"] = WiFi.status() == WL_CONNECTED;
   doc["ip"] = WiFi.localIP().toString();
   doc["uptime"] = millis();
+  doc["heap"] = ESP.getFreeHeap();
+  doc["psram"] = ESP.getFreePsram();
+
+  // Cellular status
+  if (board_type == BOARD_SIM7670G) {
+    JsonObject cellular = doc.createNestedObject("cellular");
+    cellular["enabled"] = cellular_enabled;
+    cellular["connected"] = cellular_connected;
+    cellular["operator"] = cellular_operator;
+    cellular["signal"] = cellular_signal_strength;
+  }
 
   JsonArray inputsArray = doc.createNestedArray("inputs");
   for (int i = 0; i < MAX_INPUTS; i++) {
@@ -978,6 +3109,86 @@ void handleTestTelegram() {
   }
 }
 
+void handleTestCamera() {
+  if (!camera_enabled || !camera_initialized) {
+    server.send(400, "text/plain", "Camera not enabled or initialized");
+    return;
+  }
+
+  String filename = capturePhoto();
+  if (filename.length() > 0) {
+    server.send(200, "text/plain", "SUCCESS - Photo saved: " + filename);
+  } else {
+    server.send(500, "text/plain", "FAILED - Could not capture photo");
+  }
+}
+
+void handleTestInput() {
+  if (!server.hasArg("id")) {
+    server.send(400, "text/plain", "Missing input ID parameter");
+    return;
+  }
+
+  int inputId = server.arg("id").toInt();
+  if (inputId < 0 || inputId >= MAX_INPUTS) {
+    server.send(400, "text/plain", "Invalid input ID");
+    return;
+  }
+
+  if (!inputs[inputId].enabled) {
+    server.send(400, "text/plain", "Input " + String(inputId + 1) + " is not enabled");
+    return;
+  }
+
+  // Simulate input trigger
+  Serial.printf("Manual test triggered for Input %d (%s)\n", inputId + 1, inputs[inputId].name.c_str());
+  addLog("INFO", "Manual trigger test: Input " + String(inputId + 1));
+
+  // Get current timestamp
+  struct tm timeinfo;
+  String timestamp = "Unknown time";
+  if (getLocalTime(&timeinfo)) {
+    char buffer[32];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    timestamp = String(buffer);
+  }
+
+  // Use ON message for manual test
+  String message = inputs[inputId].message_on;
+  message.replace("{name}", inputs[inputId].name);
+  message.replace("{timestamp}", timestamp);
+
+  // Capture photo if enabled for this input
+  String photoFilename = "";
+  if (inputs[inputId].capture_photo && camera_enabled && camera_initialized) {
+    photoFilename = capturePhoto();
+  }
+
+  // Send notifications
+  bool anySuccess = false;
+  if (pushbullet_enabled && pushbullet_token.length() > 0) {
+    anySuccess |= sendPushbulletNotification(notification_title, message);
+  }
+  if (email_enabled && recipient_email.length() > 0) {
+    anySuccess |= sendEmailNotification(notification_title, message);
+  }
+  if (telegram_enabled && telegram_token.length() > 0) {
+    anySuccess |= sendTelegramNotification(message);
+  }
+
+  String response = "Test notification sent for Input " + String(inputId + 1) + " (" + inputs[inputId].name + ")";
+  if (photoFilename.length() > 0) {
+    response += "\nPhoto captured: " + photoFilename;
+  }
+  if (anySuccess) {
+    response += "\nNotifications: SUCCESS";
+  } else {
+    response += "\nNotifications: No services enabled or configured";
+  }
+
+  server.send(200, "text/plain", response);
+}
+
 void handleResetWiFi() {
   String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
   "<title>Resetting WiFi...</title><style>"
@@ -1009,24 +3220,449 @@ void handleResetWiFi() {
   ESP.restart();
 }
 
-void sendNotifications(String title, String body) {
+void handleGetConfig() {
+  StaticJsonDocument<2048> doc;
+
+  doc["version"] = VERSION;
+  doc["wifi_ssid"] = wifi_ssid;
+  doc["web_username"] = web_username;
+  doc["board_type"] = board_type;
+  doc["camera_enabled"] = camera_enabled;
+  doc["gps_enabled"] = gps_enabled;
+  doc["cellular_enabled"] = cellular_enabled;
+  doc["apn"] = apn;
+
+  doc["pushbullet_enabled"] = pushbullet_enabled;
+  doc["pushbullet_token"] = pushbullet_token;
+  doc["pushbullet_conn_mode"] = pushbullet_conn_mode;
+
+  doc["email_enabled"] = email_enabled;
+  doc["smtp_host"] = smtp_host;
+  doc["smtp_port"] = smtp_port;
+  doc["smtp_email"] = smtp_email;
+  doc["recipient_email"] = recipient_email;
+  doc["email_conn_mode"] = email_conn_mode;
+
+  doc["telegram_enabled"] = telegram_enabled;
+  doc["telegram_token"] = telegram_token;
+  doc["telegram_chat_id"] = telegram_chat_id;
+  doc["telegram_conn_mode"] = telegram_conn_mode;
+
+  doc["sms_enabled"] = sms_enabled;
+  doc["sms_phone_number"] = sms_phone_number;
+  doc["sms_conn_mode"] = sms_conn_mode;
+
+  doc["notification_title"] = notification_title;
+  doc["gmt_offset"] = gmt_offset;
+  doc["daylight_offset"] = daylight_offset;
+
+  JsonArray inputsArray = doc.createNestedArray("inputs");
+  for (int i = 0; i < MAX_INPUTS; i++) {
+    JsonObject input = inputsArray.createNestedObject();
+    input["enabled"] = inputs[i].enabled;
+    input["name"] = inputs[i].name;
+    input["pin"] = inputs[i].pin;
+    input["momentary_mode"] = inputs[i].momentary_mode;
+    input["capture_photo"] = inputs[i].capture_photo;
+    input["include_gps"] = inputs[i].include_gps;
+    input["message_on"] = inputs[i].message_on;
+    input["message_off"] = inputs[i].message_off;
+  }
+
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleGallery() {
+  #ifdef HAS_CAMERA_LIB
+  if (!camera_enabled || !sd_card_available) {
+    server.send(400, "text/plain", "Camera or SD card not available");
+    return;
+  }
+
+  String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  "<title>Photo Gallery - ESP32-Notifier</title><style>"
+  ":root{--bg:#f0f0f0;--card:#fff;--text:#333;--border:#ddd}"
+  "body.dark{--bg:#1a1a1a;--card:#2d2d2d;--text:#e0e0e0;--border:#404040}"
+  "body{font-family:Arial;margin:20px;background:var(--bg);color:var(--text);transition:all 0.3s}"
+  ".c{max-width:1200px;margin:auto;background:var(--card);padding:20px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}"
+  "h1{display:flex;justify-content:space-between;align-items:center}"
+  ".theme-toggle{background:none;border:2px solid var(--border);padding:6px 12px;cursor:pointer;border-radius:4px;font-size:18px}"
+  ".back{display:inline-block;background:#4CAF50;color:#fff;padding:8px 16px;text-decoration:none;border-radius:4px;margin-bottom:10px}"
+  ".gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:15px;margin-top:20px}"
+  ".photo-card{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;transition:transform 0.2s}"
+  ".photo-card:hover{transform:scale(1.02);box-shadow:0 4px 15px rgba(0,0,0,0.2)}"
+  ".photo-card img{width:100%;height:200px;object-fit:cover;background:#000}"
+  ".photo-info{padding:10px;font-size:12px}"
+  ".photo-name{font-weight:bold;margin-bottom:5px}"
+  ".photo-size{color:#666}"
+  ".btn{display:inline-block;padding:6px 12px;margin:5px 2px;background:#2196F3;color:#fff;text-decoration:none;border-radius:4px;font-size:12px}"
+  ".btn-danger{background:#f44336}"
+  "#loading{text-align:center;padding:40px;color:var(--text)}"
+  "</style></head><body><div class='c'><a href='/' class='back'>← Back</a>"
+  "<h1><span>📷 Photo Gallery</span><button class='theme-toggle' onclick='toggleTheme()'>🌓</button></h1>"
+  "<div id='loading'>Loading photos...</div><div id='gallery' class='gallery'></div></div>"
+  "<script>"
+  "function toggleTheme(){document.body.classList.toggle('dark');localStorage.setItem('theme',document.body.classList.contains('dark')?'dark':'light')}"
+  "if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');"
+  "async function loadGallery(){"
+  "try{"
+  "const r=await fetch('/api/photos');"
+  "const d=await r.json();"
+  "document.getElementById('loading').style.display='none';"
+  "if(d.photos.length===0){document.getElementById('gallery').innerHTML='<p>No photos found</p>';return}"
+  "let html='';"
+  "for(const p of d.photos){"
+  "html+='<div class=\"photo-card\">';"
+  "html+='<img src=\"/photo?file='+p.name+'\" alt=\"'+p.name+'\">';"
+  "html+='<div class=\"photo-info\">';"
+  "html+='<div class=\"photo-name\">'+p.name+'</div>';"
+  "html+='<div class=\"photo-size\">'+Math.round(p.size/1024)+' KB</div>';"
+  "html+='<a href=\"/photo?file='+p.name+'&download=1\" class=\"btn\">Download</a>';"
+  "html+='</div></div>';"
+  "}"
+  "document.getElementById('gallery').innerHTML=html;"
+  "}catch(e){document.getElementById('loading').innerHTML='Error loading photos: '+e}"
+  "}"
+  "loadGallery();"
+  "</script></body></html>");
+
+  server.send(200, "text/html", html);
+  #else
+  server.send(400, "text/plain", "Camera library not available");
+  #endif
+}
+
+void handlePhotoList() {
+  #ifdef HAS_CAMERA_LIB
+  if (!sd_card_available) {
+    server.send(400, "application/json", "{\"error\":\"SD card not available\"}");
+    return;
+  }
+
+  File root = SD_MMC.open("/");
+  if (!root || !root.isDirectory()) {
+    server.send(500, "application/json", "{\"error\":\"Failed to open root directory\"}");
+    return;
+  }
+
+  String json = "{\"photos\":[";
+  bool first = true;
+
+  File file = root.openNextFile();
+  while (file) {
+    if (!file.isDirectory()) {
+      String filename = String(file.name());
+      // Remove leading slash if present
+      if (filename.startsWith("/")) {
+        filename = filename.substring(1);
+      }
+      if (filename.endsWith(".jpg") || filename.endsWith(".JPG")) {
+        if (!first) json += ",";
+        json += "{\"name\":\"" + filename + "\",\"size\":" + String(file.size()) + "}";
+        first = false;
+      }
+    }
+    file = root.openNextFile();
+  }
+
+  json += "]}";
+  server.send(200, "application/json", json);
+  #else
+  server.send(400, "application/json", "{\"error\":\"Camera library not available\"}");
+  #endif
+}
+
+void handlePhotoDownload() {
+  #ifdef HAS_CAMERA_LIB
+  if (!sd_card_available) {
+    server.send(400, "text/plain", "SD card not available");
+    return;
+  }
+
+  if (!server.hasArg("file")) {
+    server.send(400, "text/plain", "Missing file parameter");
+    return;
+  }
+
+  String filename = server.arg("file");
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  File file = SD_MMC.open(filename.c_str(), FILE_READ);
+  if (!file) {
+    server.send(404, "text/plain", "File not found");
+    return;
+  }
+
+  bool download = server.hasArg("download");
+  if (download) {
+    server.sendHeader("Content-Disposition", "attachment; filename=\"" + String(file.name()) + "\"");
+  }
+
+  server.streamFile(file, "image/jpeg");
+  file.close();
+  #else
+  server.send(400, "text/plain", "Camera library not available");
+  #endif
+}
+
+void handleCellularDiagnostics() {
+  if (board_type != BOARD_SIM7670G) {
+    server.send(400, "text/plain", "Board does not support cellular");
+    return;
+  }
+
+  String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  "<title>Cellular Diagnostics - ESP32-Notifier</title><style>"
+  ":root{--bg:#f0f0f0;--card:#fff;--text:#333;--text2:#555;--border:#ddd}"
+  "body.dark{--bg:#1a1a1a;--card:#2d2d2d;--text:#e0e0e0;--text2:#b0b0b0;--border:#404040}"
+  "body{font-family:Arial;margin:20px;background:var(--bg);color:var(--text);transition:all 0.3s}"
+  ".c{max-width:900px;margin:auto;background:var(--card);padding:20px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}"
+  "h1{display:flex;justify-content:space-between;align-items:center}"
+  ".theme-toggle{background:none;border:2px solid var(--border);padding:6px 12px;cursor:pointer;border-radius:4px;font-size:18px}"
+  ".back{display:inline-block;background:#4CAF50;color:#fff;padding:8px 16px;text-decoration:none;border-radius:4px;margin-bottom:10px}"
+  ".info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px;margin:20px 0}"
+  ".info-card{background:var(--card);border:1px solid var(--border);padding:15px;border-radius:8px}"
+  ".info-card h3{margin:0 0 10px 0;color:var(--text2);font-size:14px;text-transform:uppercase}"
+  ".info-value{font-size:24px;font-weight:bold;margin:5px 0}"
+  ".status-badge{display:inline-block;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:bold}"
+  ".status-connected{background:#4CAF50;color:#fff}.status-disconnected{background:#f44336;color:#fff}.status-disabled{background:#999;color:#fff}"
+  ".signal-meter{width:100%;height:30px;background:var(--border);border-radius:4px;overflow:hidden;margin:10px 0}"
+  ".signal-fill{height:100%;transition:width 0.5s}"
+  ".sig-excellent{background:#4CAF50}.sig-good{background:#8BC34A}.sig-fair{background:#FF9800}.sig-poor{background:#f44336}"
+  "button{background:#2196F3;color:#fff;padding:10px 20px;border:none;border-radius:4px;cursor:pointer;margin:5px;font-size:14px}"
+  "button:hover{opacity:0.9}.btn-danger{background:#f44336}"
+  "#loading{text-align:center;padding:20px;color:var(--text2)}"
+  ".detail-table{width:100%;border-collapse:collapse;margin:15px 0}"
+  ".detail-table td{padding:8px;border-bottom:1px solid var(--border)}"
+  ".detail-table td:first-child{font-weight:bold;width:40%;color:var(--text2)}"
+  "</style></head><body><div class='c'><a href='/' class='back'>← Back</a>"
+  "<h1><span>📶 Cellular Diagnostics</span><button class='theme-toggle' onclick='toggleTheme()'>🌓</button></h1>"
+  "<div id='loading'>Loading diagnostics...</div><div id='content' style='display:none'>"
+  "<div class='info-grid'>"
+  "<div class='info-card'><h3>Connection Status</h3><div id='status'></div></div>"
+  "<div class='info-card'><h3>Signal Strength</h3><div id='signal'></div></div>"
+  "<div class='info-card'><h3>Network Type</h3><div class='info-value' id='network'></div></div>"
+  "<div class='info-card'><h3>Operator</h3><div class='info-value' id='operator'></div></div>"
+  "</div>"
+  "<h2>Modem Information</h2><table class='detail-table'>"
+  "<tr><td>Model</td><td id='model'>-</td></tr>"
+  "<tr><td>IMEI</td><td id='imei'>-</td></tr>"
+  "<tr><td>SIM ICCID</td><td id='iccid'>-</td></tr>"
+  "<tr><td>APN</td><td id='apn'>-</td></tr>"
+  "</table>"
+  "<h2>Actions</h2>"
+  "<button onclick='refreshData()'>🔄 Refresh Status</button>"
+  "<button onclick='reconnect()' class='btn-danger'>🔌 Reconnect</button>"
+  "</div></div>"
+  "<script>"
+  "function toggleTheme(){document.body.classList.toggle('dark');localStorage.setItem('theme',document.body.classList.contains('dark')?'dark':'light')}"
+  "if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');"
+  "function loadData(){fetch('/api/cellular').then(r=>r.json()).then(d=>{"
+  "document.getElementById('loading').style.display='none';"
+  "document.getElementById('content').style.display='block';"
+  "let statusHtml='<div class=\"status-badge status-'+(d.connected?'connected':'disconnected')+'\">';"
+  "statusHtml+=d.connected?'Connected':'Disconnected';"
+  "statusHtml+='</div>';document.getElementById('status').innerHTML=statusHtml;"
+  "let sigPct=Math.min(100,Math.round((d.signal/31)*100));"
+  "let sigClass=sigPct>75?'excellent':sigPct>50?'good':sigPct>25?'fair':'poor';"
+  "let sigHtml='<div class=\"info-value\">'+d.signal+'/31 ('+sigPct+'%)</div>';"
+  "sigHtml+='<div class=\"signal-meter\"><div class=\"signal-fill sig-'+sigClass+'\" style=\"width:'+sigPct+'%\"></div></div>';"
+  "document.getElementById('signal').innerHTML=sigHtml;"
+  "document.getElementById('network').textContent=d.network_type||'Unknown';"
+  "document.getElementById('operator').textContent=d.operator||'None';"
+  "document.getElementById('model').textContent=d.model||'Unknown';"
+  "document.getElementById('imei').textContent=d.imei||'Unknown';"
+  "document.getElementById('iccid').textContent=d.iccid||'No SIM';"
+  "document.getElementById('apn').textContent=d.apn||'Not set';"
+  "}).catch(e=>{document.getElementById('loading').innerHTML='Error loading data: '+e})}"
+  "function refreshData(){document.getElementById('loading').style.display='block';document.getElementById('content').style.display='none';"
+  "fetch('/cellular/refresh').then(()=>setTimeout(loadData,2000)).catch(e=>alert('Refresh failed: '+e))}"
+  "function reconnect(){if(confirm('Reconnect to cellular network? This may take 30-60 seconds.')){alert('Reconnecting... Please wait.'); refreshData()}}"
+  "loadData();"
+  "</script></body></html>");
+
+  server.send(200, "text/html", html);
+}
+
+void handleCellularAPI() {
+  StaticJsonDocument<512> doc;
+
+  doc["enabled"] = cellular_enabled;
+  doc["initialized"] = modem_initialized;
+  doc["connected"] = cellular_connected;
+  doc["operator"] = cellular_operator;
+  doc["signal"] = cellular_signal_strength;
+  doc["network_type"] = modem_network_type;
+  doc["model"] = modem_model;
+  doc["imei"] = modem_imei;
+  doc["iccid"] = modem_iccid;
+  doc["apn"] = apn;
+
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleCellularRefresh() {
+  if (!cellular_enabled || !modem_initialized) {
+    server.send(400, "text/plain", "Cellular not enabled or modem not initialized");
+    return;
+  }
+
+  // Refresh signal strength
+  String response = sendATCommand("AT+CSQ");
+  int rssiStart = response.indexOf(": ") + 2;
+  int rssiEnd = response.indexOf(",", rssiStart);
+  if (rssiStart > 1 && rssiEnd > rssiStart) {
+    cellular_signal_strength = response.substring(rssiStart, rssiEnd).toInt();
+  }
+
+  // Refresh network type
+  response = sendATCommand("AT+CPSI?");
+  if (response.indexOf("LTE") >= 0) {
+    modem_network_type = "4G LTE";
+  } else if (response.indexOf("WCDMA") >= 0 || response.indexOf("HSDPA") >= 0) {
+    modem_network_type = "3G";
+  } else if (response.indexOf("GSM") >= 0 || response.indexOf("GPRS") >= 0) {
+    modem_network_type = "2G";
+  }
+
+  // Check connection status
+  response = sendATCommand("AT+CGACT?");
+  cellular_connected = (response.indexOf("+CGACT: 1,1") >= 0);
+
+  server.send(200, "text/plain", "Refreshed");
+}
+
+// ========================================
+// CONNECTION HELPER FUNCTIONS
+// ========================================
+
+bool shouldUseCellular(int connectionMode) {
+  // Determine if we should use cellular based on mode and availability
+  switch (connectionMode) {
+    case CONN_WIFI_ONLY:
+      return false;
+    case CONN_CELL_ONLY:
+      return cellular_connected;
+    case CONN_WIFI_CELL_BACKUP:
+      return (wifiState != WIFI_CONNECTED && cellular_connected);
+    default:
+      return false;
+  }
+}
+
+String getConnectionStatus() {
+  String status = "";
+  if (wifiState == WIFI_CONNECTED) {
+    status += "WiFi: Connected";
+  } else {
+    status += "WiFi: Disconnected";
+  }
+
+  if (cellular_connected) {
+    status += " | Cell: " + cellular_operator + " (RSSI: " + String(cellular_signal_strength) + ")";
+  } else if (cellular_enabled) {
+    status += " | Cell: Disconnected";
+  }
+
+  return status;
+}
+
+void sendNotifications(String title, String body, String photoFile) {
   Serial.println(F("--- Sending Notifications ---"));
+  Serial.println(getConnectionStatus());
 
+  // Add BMP180 sensor data if enabled and configured
+  if (include_bmp180_in_notifications && bmp180_initialized) {
+    String sensorData = getBMP180DataFormatted();
+    if (sensorData.length() > 0) {
+      body += "\n" + sensorData;
+      Serial.println(F("Added BMP180 sensor data to notification"));
+    }
+  }
+
+  // Pushbullet
   if (pushbullet_enabled && pushbullet_token.length() > 0) {
-    if (!sendPushbulletNotification(title, body)) {
-      queueRetry("pushbullet", title, body);
+    bool useCellular = shouldUseCellular(pushbullet_conn_mode);
+    if (useCellular) {
+      // Send via cellular HTTP
+      StaticJsonDocument<256> doc;
+      doc["type"] = "note";
+      doc["title"] = title;
+      doc["body"] = body;
+      String payload;
+      serializeJson(doc, payload);
+
+      String response = sendHTTPRequest("https://api.pushbullet.com/v2/pushes", "POST", payload);
+      if (response.indexOf("200") >= 0 || response.indexOf("OK") >= 0) {
+        Serial.println(F("✓ Pushbullet sent (cellular)"));
+        addLog("SUCCESS", "Pushbullet sent via cellular");
+      } else {
+        addLog("ERROR", "Pushbullet failed via cellular");
+      }
+    } else if (wifiState == WIFI_CONNECTED) {
+      if (!sendPushbulletNotification(title, body, photoFile)) {
+        queueRetry("pushbullet", title, body);
+      }
     }
   }
 
+  // Email
   if (email_enabled && smtp_email.length() > 0 && recipient_email.length() > 0) {
-    if (!sendEmailNotification(title, body)) {
-      queueRetry("email", title, body);
+    bool useCellular = shouldUseCellular(email_conn_mode);
+    // Email over cellular would require complex SMTP over AT commands
+    // For now, only send via WiFi
+    if (!useCellular && wifiState == WIFI_CONNECTED) {
+      if (!sendEmailNotification(title, body, photoFile)) {
+        queueRetry("email", title, body);
+      }
+    } else if (useCellular) {
+      Serial.println(F("Email over cellular not yet implemented, using WiFi fallback"));
+      if (wifiState == WIFI_CONNECTED) {
+        sendEmailNotification(title, body, photoFile);
+      }
     }
   }
 
+  // Telegram
   if (telegram_enabled && telegram_token.length() > 0 && telegram_chat_id.length() > 0) {
-    if (!sendTelegramNotification(body)) {
-      queueRetry("telegram", title, body);
+    bool useCellular = shouldUseCellular(telegram_conn_mode);
+    if (useCellular) {
+      // Send via cellular HTTP
+      StaticJsonDocument<512> doc;
+      doc["chat_id"] = telegram_chat_id;
+      doc["text"] = body;
+      String payload;
+      serializeJson(doc, payload);
+
+      String url = "https://api.telegram.org/bot" + telegram_token + "/sendMessage";
+      String response = sendHTTPRequest(url, "POST", payload);
+      if (response.indexOf("200") >= 0 || response.indexOf("\"ok\":true") >= 0) {
+        Serial.println(F("✓ Telegram sent (cellular)"));
+        addLog("SUCCESS", "Telegram sent via cellular");
+      } else {
+        addLog("ERROR", "Telegram failed via cellular");
+      }
+    } else if (wifiState == WIFI_CONNECTED) {
+      if (!sendTelegramNotification(body, photoFile)) {
+        queueRetry("telegram", title, body);
+      }
+    }
+  }
+
+  // SMS
+  if (sms_enabled && sms_phone_number.length() > 0) {
+    bool useCellular = shouldUseCellular(sms_conn_mode);
+    if (useCellular || cellular_connected) {
+      // Truncate message for SMS (160 char limit)
+      String smsBody = body;
+      if (smsBody.length() > 160) {
+        smsBody = smsBody.substring(0, 157) + "...";
+      }
+      sendSMS(sms_phone_number, smsBody);
     }
   }
 
@@ -1034,7 +3670,7 @@ void sendNotifications(String title, String body) {
 }
 
 void handleLogs() {
-  String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+  String html = F("<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
   "<meta http-equiv='refresh' content='10'><title>Logs - ESP32-Notifier</title><style>"
   "body{font-family:monospace;margin:20px;background:#1e1e1e;color:#d4d4d4}.c{max-width:1000px;margin:auto}"
   "h1{color:#4ec9b0;text-align:center}.log{margin:5px 0;padding:8px;border-radius:4px;font-size:12px;line-height:1.4}"
@@ -1064,7 +3700,7 @@ void handleLogs() {
   server.send(200, "text/html", html);
 }
 
-bool sendPushbulletNotification(String title, String body) {
+bool sendPushbulletNotification(String title, String body, String photoFile) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println(F("✗ Pushbullet: WiFi down"));
     return false;
@@ -1075,10 +3711,32 @@ bool sendPushbulletNotification(String title, String body) {
   http.addHeader("Access-Token", pushbullet_token);
   http.addHeader("Content-Type", "application/json");
 
-  StaticJsonDocument<256> doc;
-  doc["type"] = "note";
-  doc["title"] = title;
-  doc["body"] = body;
+  StaticJsonDocument<512> doc;
+
+  // If photo is available, send as file URL pointing to ESP32 web server
+  if (photoFile.length() > 0 && sd_card_available) {
+    // Get ESP32's IP address
+    String ipAddr = WiFi.localIP().toString();
+    String filename = photoFile;
+    if (filename.startsWith("/")) filename = filename.substring(1);
+
+    // Create photo URL accessible from the internet (if port forwarded)
+    // Or accessible from local network
+    String photoUrl = "http://" + ipAddr + "/photo?file=" + filename;
+
+    doc["type"] = "link";
+    doc["title"] = title;
+    doc["body"] = body;
+    doc["url"] = photoUrl;
+
+    Serial.print(F("Pushbullet: Sending with photo link: "));
+    Serial.println(photoUrl);
+  } else {
+    // No photo, send as regular note
+    doc["type"] = "note";
+    doc["title"] = title;
+    doc["body"] = body;
+  }
 
   String payload;
   serializeJson(doc, payload);
@@ -1098,7 +3756,7 @@ bool sendPushbulletNotification(String title, String body) {
   }
 }
 
-bool sendEmailNotification(String subject, String body) {
+bool sendEmailNotification(String subject, String body, String photoFile) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println(F("✗ Email: WiFi down"));
     return false;
@@ -1117,13 +3775,31 @@ bool sendEmailNotification(String subject, String body) {
   message.addRecipient("", recipient_email.c_str());
   message.text.content = body.c_str();
 
-  if (!smtp.connect(&session)) {
+  // Attach photo if available
+  if (photoFile.length() > 0 && sd_card_available) {
+    SMTP_Attachment att;
+    att.descr.filename = photoFile.substring(photoFile.lastIndexOf('/') + 1);
+    att.descr.mime = "image/jpeg";
+    att.descr.transfer_encoding = Content_Transfer_Encoding::enc_base64;
+    att.file.storage_type = esp_mail_file_storage_type_sd;
+    att.file.path = photoFile.c_str();
+    message.addAttachment(att);
+    Serial.print(F("Email: Attaching photo "));
+    Serial.println(photoFile);
+  }
+
+  // Initialize SMTP session if needed
+  if (smtp == nullptr) {
+    smtp = new SMTPSession();
+  }
+
+  if (!smtp->connect(&session)) {
     Serial.println(F("✗ Email: SMTP connect failed"));
     return false;
   }
 
-  bool success = MailClient.sendMail(&smtp, &message);
-  smtp.closeSession();
+  bool success = MailClient.sendMail(smtp, &message);
+  smtp->closeSession();
 
   if (success) {
     Serial.println(F("✓ Email sent"));
@@ -1131,25 +3807,98 @@ bool sendEmailNotification(String subject, String body) {
     return true;
   } else {
     Serial.print(F("✗ Email failed: "));
-    Serial.println(smtp.errorReason().c_str());
-    addLog("ERROR", "Email failed - " + String(smtp.errorReason().c_str()));
+    Serial.println(smtp->errorReason().c_str());
+    addLog("ERROR", "Email failed - " + String(smtp->errorReason().c_str()));
     return false;
   }
 }
 
-bool sendTelegramNotification(String message) {
+bool sendTelegramNotification(String message, String photoFile) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println(F("✗ Telegram: WiFi down"));
     return false;
   }
 
   HTTPClient http;
+
+  // If photo is available, send as photo with caption
+  if (photoFile.length() > 0 && sd_card_available) {
+    #ifdef HAS_CAMERA_LIB
+    Serial.println(F("Telegram: Sending photo..."));
+
+    // Open the photo file
+    File file = SD_MMC.open(photoFile, FILE_READ);
+    if (!file) {
+      Serial.println(F("✗ Telegram: Failed to open photo file"));
+      // Fall back to text-only message
+    } else {
+      // Send photo using sendPhoto endpoint
+      String url = "https://api.telegram.org/bot" + telegram_token + "/sendPhoto";
+
+      // Create multipart boundary
+      String boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+
+      http.begin(url);
+      http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+      // Build multipart form data
+      String head = "--" + boundary + "\r\n";
+      head += "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n";
+      head += telegram_chat_id + "\r\n";
+      head += "--" + boundary + "\r\n";
+      head += "Content-Disposition: form-data; name=\"caption\"\r\n\r\n";
+      head += message + "\r\n";
+      head += "--" + boundary + "\r\n";
+      head += "Content-Disposition: form-data; name=\"photo\"; filename=\"photo.jpg\"\r\n";
+      head += "Content-Type: image/jpeg\r\n\r\n";
+
+      String tail = "\r\n--" + boundary + "--\r\n";
+
+      // Calculate content length
+      size_t fileSize = file.size();
+      size_t contentLength = head.length() + fileSize + tail.length();
+
+      http.addHeader("Content-Length", String(contentLength));
+
+      // Send request
+      WiFiClient* stream = http.getStreamPtr();
+      stream->print(head);
+
+      // Send file data in chunks
+      uint8_t buffer[512];
+      size_t bytesRead;
+      while ((bytesRead = file.read(buffer, sizeof(buffer))) > 0) {
+        stream->write(buffer, bytesRead);
+        esp_task_wdt_reset(); // Keep watchdog happy during upload
+      }
+
+      stream->print(tail);
+      file.close();
+
+      int code = http.GET(); // Complete the request
+      http.end();
+
+      if (code >= 200 && code < 300) {
+        Serial.println(F("✓ Telegram photo sent"));
+        addLog("SUCCESS", "Telegram photo sent");
+        return true;
+      } else {
+        Serial.print(F("✗ Telegram photo failed: "));
+        Serial.println(code);
+        addLog("ERROR", "Telegram photo failed - HTTP " + String(code));
+        // Fall through to send text-only message
+      }
+    }
+    #endif
+  }
+
+  // Send text-only message (fallback or when no photo)
   String url = "https://api.telegram.org/bot" + telegram_token + "/sendMessage";
 
   http.begin(url);
   http.addHeader("Content-Type", "application/json");
 
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<512> doc;
   doc["chat_id"] = telegram_chat_id;
   doc["text"] = message;
 

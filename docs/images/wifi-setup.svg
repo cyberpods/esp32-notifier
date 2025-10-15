@@ -3,7 +3,7 @@
   <rect x="100" y="50" width="600" height="600" fill="white" rx="8" stroke="#ddd" stroke-width="2"/>
 
   <!-- Header -->
-  <text x="400" y="100" font-family="Arial" font-size="24" fill="#333" text-anchor="middle" font-weight="bold">ESP32-Notifier Setup</text>
+  <text x="400" y="100" font-family="Arial" font-size="24" fill="#333" text-anchor="middle" font-weight="bold">ESP32-Notifier v3.2 Setup</text>
 
   <!-- Info box -->
   <rect x="120" y="120" width="560" height="40" fill="#e7f3fe" rx="4"/>
