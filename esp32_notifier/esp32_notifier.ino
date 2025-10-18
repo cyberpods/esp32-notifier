@@ -53,9 +53,9 @@
 // Optional advanced libraries - will gracefully disable if not available
 // Comment out any line below if you don't have that library installed
 #define HAS_EMAIL_LIB
-#define HAS_CAMERA_LIB  // Temporarily disabled - may be causing boot issues
-#define HAS_GPS_LIB      // Temporarily disabled - may be causing boot issues
-#define HAS_BMP180_LIB   // BMP180 temperature and pressure sensor
+#define HAS_CAMERA_LIB
+#define HAS_GPS_LIB
+#define HAS_BMP180_LIB
 
 #ifdef HAS_EMAIL_LIB
   #include <ESP_Mail_Client.h>
@@ -204,8 +204,15 @@ bool camera_initialized = false;
 #endif
 bool bmp180_enabled = false;
 bool bmp180_initialized = false;
-int bmp180_sda_pin = 21;  // Default I2C SDA pin
-int bmp180_scl_pin = 22;  // Default I2C SCL pin
+bool bmp180_needs_reinit = false;  // Flag to defer reinit until after HTTP response
+int bmp180_sda_pin = 21;  // Default I2C SDA pin (Header 2, Pin 22)
+int bmp180_scl_pin = 33;  // Default I2C SCL pin (Header 2, Pin 16 - SPI0_4, may be available)
+
+// Deferred operations flags (to prevent blocking during HTTP requests)
+bool needs_save_prefs = false;  // Defer savePreferences() call
+bool needs_time_update = false;  // Defer configTime() call
+long pending_gmt_offset = 0;
+int pending_daylight_offset = 0;
 float last_temperature = 0.0;
 float last_pressure = 0.0;
 float last_altitude = 0.0;
@@ -693,18 +700,15 @@ bool initSDCard() {
   }
 
   Serial.println(F("Initializing SD card..."));
-  Serial.printf("DEBUG: board_type = %d (0=Generic, 1=SIM7670G, 2=Freenove)\n", board_type);
 
   // SD pins differ by board - set correct pins
   int sd_clk, sd_cmd, sd_data, sd_cd;
   if (board_type == BOARD_SIM7670G) {
-    Serial.println(F("SD card pins (Waveshare): CLK=5, CMD=4, DATA=6"));
     sd_clk = SIM7670G_SD_CLK;
     sd_cmd = SIM7670G_SD_CMD;
     sd_data = SIM7670G_SD_DATA;
     sd_cd = SIM7670G_SD_CD;
   } else if (board_type == BOARD_FREENOVE_S3) {
-    Serial.println(F("SD card pins (Freenove): CLK=39, CMD=38, DATA=40"));
     sd_clk = FREENOVE_SD_CLK;
     sd_cmd = FREENOVE_SD_CMD;
     sd_data = FREENOVE_SD_DATA;
@@ -716,7 +720,6 @@ bool initSDCard() {
     sd_data = SD_MMC_DATA;
     sd_cd = SD_CD_PIN;
   }
-  Serial.flush();
 
   // Check card detect pin if available
   if (sd_cd >= 0) {
@@ -743,28 +746,21 @@ bool initSDCard() {
   Serial.println(F("Attempting SD_MMC.begin() in 1-bit mode..."));
   Serial.flush();
 
-  // Method 1: Try SD_MMC (SDMMC peripheral - faster but less compatible)
-  Serial.println(F("Method 1: Trying SD_MMC library..."));
-  Serial.printf("DEBUG: board_type=%d, BOARD_FREENOVE_S3=%d\n", board_type, BOARD_FREENOVE_S3);
-  Serial.flush();
+  // Try SD_MMC (SDMMC peripheral - faster but less compatible)
+  Serial.println(F("Trying SD_MMC library..."));
 
   bool sdmmc_success = false;
 
   // Freenove uses default SDMMC pins, try without setPins first
   if (board_type == BOARD_FREENOVE_S3) {
-    Serial.println(F("DEBUG: Freenove board detected, trying default pins"));
-    Serial.println(F("  Trying default SDMMC pins (Freenove uses hardware defaults)..."));
     if (SD_MMC.begin("/sdcard", true)) {
       sdmmc_success = true;
-      Serial.println(F("  SD_MMC 1-bit mode SUCCESS with default pins!"));
-    } else {
-      Serial.println(F("  Default pins failed, trying setPins()..."));
+      Serial.println(F("SD_MMC 1-bit mode SUCCESS with default pins"));
     }
   }
 
   // If not Freenove or default pins failed, try with explicit setPins
   if (!sdmmc_success) {
-    Serial.printf("Setting SD pins: CLK=%d, CMD=%d, DATA=%d\n", sd_clk, sd_cmd, sd_data);
     if (!SD_MMC.setPins(sd_clk, sd_cmd, sd_data)) {
       Serial.println(F("WARNING: setPins() failed or not supported"));
     }
@@ -1449,23 +1445,104 @@ bool initBMP180() {
   Serial.println(F("Initializing BMP180 sensor..."));
   Serial.printf("I2C pins - SDA: GPIO%d, SCL: GPIO%d\n", bmp180_sda_pin, bmp180_scl_pin);
 
-  // Initialize I2C with custom pins
-  Wire.begin(bmp180_sda_pin, bmp180_scl_pin);
+  // End existing Wire instance to properly reinitialize with new pins
+  Wire.end();
   delay(100);
+
+  // Enable internal pull-ups on I2C pins (helps if external pull-ups are missing)
+  pinMode(bmp180_sda_pin, INPUT_PULLUP);
+  pinMode(bmp180_scl_pin, INPUT_PULLUP);
+  delay(50);
+
+  // Initialize I2C with custom pins
+  bool wireStarted = Wire.begin(bmp180_sda_pin, bmp180_scl_pin);
+  if (!wireStarted) {
+    Serial.println(F("ERROR: Failed to initialize I2C bus!"));
+    Serial.println(F("       This usually means invalid pin numbers"));
+    addLog("ERROR", "I2C initialization failed - check pins");
+    bmp180_initialized = false;
+    return false;
+  }
+  Serial.println(F("  ✓ I2C bus initialized"));
+  delay(100);
+
+  // Try multiple I2C speeds for better compatibility
+  Serial.println(F("  Setting I2C clock to 100kHz..."));
+  Wire.setClock(100000);  // Start with 100kHz for reliability
+  delay(100);
+
+  // Perform a quick I2C bus scan to verify the sensor is present
+  Serial.println(F("  Scanning I2C bus for device at 0x77..."));
+  Wire.beginTransmission(0x77);
+  uint8_t error = Wire.endTransmission();
+  if (error != 0) {
+    Serial.printf("  ✗ No response at 0x77 (error code: %d)\n", error);
+    Serial.println(F("\n  Scanning entire I2C bus for any devices..."));
+    bool foundAny = false;
+    for (uint8_t addr = 1; addr < 127; addr++) {
+      Wire.beginTransmission(addr);
+      if (Wire.endTransmission() == 0) {
+        Serial.printf("  Found device at 0x%02X\n", addr);
+        foundAny = true;
+      }
+    }
+    if (!foundAny) {
+      Serial.println(F("  ✗ No I2C devices found on the bus!"));
+      Serial.println(F("\n  CRITICAL: This indicates a wiring problem:"));
+      Serial.println(F("    - Check ALL connections are secure"));
+      Serial.println(F("    - Verify you're using 3.3V (NOT 5V!)"));
+      Serial.println(F("    - Try different GPIO pins"));
+      Serial.println(F("    - Check for damaged wires/breadboard"));
+      Serial.println(F("    - Module might be defective"));
+    }
+  } else {
+    Serial.println(F("  ✓ Device detected at 0x77!"));
+  }
+  delay(50);
 
   // Initialize BMP180 object if needed
   if (bmp == nullptr) {
     bmp = new Adafruit_BMP085();
   }
 
-  // Try to initialize the sensor
-  if (!bmp->begin()) {
-    Serial.println(F("ERROR: Could not find BMP180 sensor!"));
-    Serial.println(F("Check wiring:"));
-    Serial.printf("  VCC -> 3.3V\n");
-    Serial.printf("  GND -> GND\n");
-    Serial.printf("  SDA -> GPIO%d\n", bmp180_sda_pin);
-    Serial.printf("  SCL -> GPIO%d\n", bmp180_scl_pin);
+  // Try to initialize the sensor with custom Wire instance
+  Serial.println(F("  Attempting to detect BMP180 at 0x77..."));
+
+  // The Adafruit library's begin() method can take a Wire instance
+  // Try begin() with Wire parameter (if library supports it)
+  bool sensorFound = false;
+
+  // Method 1: Try with Wire parameter (newer library versions)
+  #if defined(ARDUINO_ARCH_ESP32)
+    // ESP32-specific: Use TwoWire parameter
+    sensorFound = bmp->begin(BMP085_STANDARD, &Wire);
+  #else
+    // Fallback for older library versions
+    sensorFound = bmp->begin();
+  #endif
+
+  if (!sensorFound) {
+    // Try alternative initialization mode
+    Serial.println(F("  ✗ Standard mode failed, trying ultra-high resolution mode..."));
+    sensorFound = bmp->begin(BMP085_ULTRAHIGHRES, &Wire);
+  }
+
+  if (!sensorFound) {
+    Serial.println(F("\n  ✗✗✗ ERROR: Could not find BMP180 sensor! ✗✗✗"));
+    Serial.println(F("\n  This means the sensor is NOT responding at 0x77."));
+    Serial.println(F("\n  POSSIBLE CAUSES:"));
+    Serial.println(F("  1. Wrong sensor type (you have BME280/BMP280, not BMP180)"));
+    Serial.println(F("  2. Defective sensor module"));
+    Serial.println(F("  3. Wiring issue:"));
+    Serial.printf("     - VCC -> 3.3V\n");
+    Serial.printf("     - GND -> GND\n");
+    Serial.printf("     - SDA -> GPIO%d\n", bmp180_sda_pin);
+    Serial.printf("     - SCL -> GPIO%d\n", bmp180_scl_pin);
+    Serial.println(F("\n  NEXT STEPS:"));
+    Serial.println(F("  1. Click 'Search for BMP180' button in web interface"));
+    Serial.println(F("  2. Copy the scan results"));
+    Serial.println(F("  3. Try swapping SDA and SCL wires"));
+    Serial.println(F("  4. Try different GPIO pins (21/22)"));
     addLog("ERROR", "BMP180 sensor not found - check wiring");
     bmp180_initialized = false;
     return false;
@@ -1763,21 +1840,36 @@ void setup() {
   }
 
   // Initialize BMP180 sensor if enabled (works on all board types)
+  Serial.println(F("========================================"));
+  Serial.println(F("[BOOT] BMP180 SENSOR INITIALIZATION"));
+  Serial.println(F("========================================"));
   if (bmp180_enabled) {
-    Serial.println(F("[BOOT] Initializing BMP180 sensor..."));
+    Serial.println(F("[BOOT] BMP180 sensor is ENABLED"));
+    Serial.printf("[BOOT] I2C Configuration - SDA: GPIO%d, SCL: GPIO%d\n", bmp180_sda_pin, bmp180_scl_pin);
+    Serial.println(F("[BOOT] Attempting to initialize BMP180..."));
     Serial.flush();
     esp_task_wdt_reset();  // Reset watchdog before sensor init
     if (initBMP180()) {
-      Serial.println(F("[BOOT] BMP180 sensor ready"));
+      Serial.println(F("[BOOT] ✓ BMP180 sensor initialized successfully!"));
+      Serial.printf("[BOOT] Temperature: %.1f°C, Pressure: %.1f hPa\n", last_temperature, last_pressure);
       Serial.flush();
     } else {
-      Serial.println(F("[BOOT] BMP180 sensor init failed - continuing without sensor"));
+      Serial.println(F("[BOOT] ✗ BMP180 sensor initialization FAILED"));
+      Serial.println(F("[BOOT] Check the following:"));
+      Serial.println(F("[BOOT]   1. Wiring: VCC->3.3V, GND->GND"));
+      Serial.printf("[BOOT]   2. SDA connected to GPIO%d\n", bmp180_sda_pin);
+      Serial.printf("[BOOT]   3. SCL connected to GPIO%d\n", bmp180_scl_pin);
+      Serial.println(F("[BOOT]   4. Use web interface 'Search for BMP180' to scan I2C bus"));
+      Serial.println(F("[BOOT] Continuing without BMP180 sensor..."));
       Serial.flush();
     }
   } else {
-    Serial.println(F("[BOOT] BMP180 sensor disabled, skipping"));
+    Serial.println(F("[BOOT] BMP180 sensor is DISABLED in settings"));
+    Serial.println(F("[BOOT] Enable it in the web interface to use the sensor"));
     Serial.flush();
   }
+  Serial.println(F("========================================"));
+  Serial.flush();
 
   // Configure enabled input pins
   Serial.println(F("[BOOT] Configuring input pins..."));
@@ -1831,6 +1923,41 @@ void loop() {
 
   // Always handle web server (needed for AP mode)
   server.handleClient();
+
+  // Handle deferred operations (after HTTP response sent)
+  // IMPORTANT: Save preferences FIRST before any hardware operations
+  // that might block or fail, to ensure settings are persisted
+  if (needs_save_prefs) {
+    needs_save_prefs = false;
+    delay(50);  // Brief delay to ensure HTTP response fully sent
+    addLog("INFO", "Saving preferences to flash");
+    savePreferences();
+  }
+
+  if (needs_time_update) {
+    needs_time_update = false;
+    delay(50);  // Brief delay to ensure HTTP response fully sent
+    addLog("INFO", "Updating time configuration");
+    configTime(pending_gmt_offset, pending_daylight_offset, ntpServer);
+  }
+
+  if (bmp180_needs_reinit) {
+    bmp180_needs_reinit = false;
+    delay(100);  // Brief delay to ensure HTTP response fully sent
+    Serial.println(F("\n========================================"));
+    Serial.println(F("[REINIT] Reinitializing BMP180 sensor..."));
+    Serial.printf("[REINIT] New I2C pins - SDA: GPIO%d, SCL: GPIO%d\n", bmp180_sda_pin, bmp180_scl_pin);
+    Serial.println(F("========================================"));
+    Serial.flush();
+    if (initBMP180()) {
+      Serial.println(F("[REINIT] ✓ BMP180 reinitialization successful!"));
+    } else {
+      Serial.println(F("[REINIT] ✗ BMP180 reinitialization failed!"));
+      Serial.println(F("[REINIT] Use 'Search for BMP180' in web interface to scan I2C bus"));
+    }
+    Serial.println(F("========================================\n"));
+    Serial.flush();
+  }
 
   if (apMode) {
     // In AP mode, just handle web requests for configuration
@@ -2120,6 +2247,12 @@ void loadPreferences() {
   bmp180_sda_pin = preferences.getInt(PrefKeys::BMP180_SDA, bmp180_sda_pin);
   bmp180_scl_pin = preferences.getInt(PrefKeys::BMP180_SCL, bmp180_scl_pin);
   include_bmp180_in_notifications = preferences.getBool(PrefKeys::BMP180_IN_NOTIF, include_bmp180_in_notifications);
+  Serial.printf("[PREF] BMP180 - Enabled: %s, SDA: GPIO%d, SCL: GPIO%d, Include in notifications: %s\n",
+                bmp180_enabled ? "YES" : "NO",
+                bmp180_sda_pin,
+                bmp180_scl_pin,
+                include_bmp180_in_notifications ? "YES" : "NO");
+  Serial.flush();
 
   // Update input pin defaults based on board type before loading preferences
   // This ensures SIM7670G board uses safe pins that don't conflict with peripherals
@@ -2313,6 +2446,41 @@ void setupWebServer() {
     handleTestInput();
   });
 
+  server.on("/test/sms", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestSMS();
+  });
+
+  server.on("/test/bmp180", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestBMP180();
+  });
+
+  server.on("/search/bmp180", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleSearchBMP180();
+  });
+
+  server.on("/test/gpio", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestGPIO();
+  });
+
+  server.on("/test/cellular", []() {
+    if (!server.authenticate(web_username.c_str(), web_password.c_str())) {
+      return server.requestAuthentication();
+    }
+    handleTestCellular();
+  });
+
   server.on("/logs", []() {
     if (!apMode && !server.authenticate(web_username.c_str(), web_password.c_str())) {
       return server.requestAuthentication();
@@ -2493,6 +2661,7 @@ void handleRoot() {
       html += F("📶 Cellular: Disconnected<br>");
     }
     html += F("</p>");
+    html += F("<button type='button' class='b3' onclick='testService(\"cellular\")'>Test Cellular Modem</button>");
     html += F("</div>");
   }
 
@@ -2536,8 +2705,11 @@ void handleRoot() {
     html += F("Sensor disabled");
   }
   html += F("</p>");
+  html += F("<button type='button' class='b3' onclick='testService(\"bmp180\")'>Test / Read Sensor</button> ");
+  html += F("<button type='button' class='b3' onclick='searchBMP180()'>Search for BMP180</button> ");
+  html += F("<button type='button' class='b2' onclick='testGPIO()'>⚡ Test GPIO Pins</button>");
   html += F("<p style='font-size:11px;color:#999;margin-top:5px'>");
-  html += F("Default pins: SDA=21, SCL=22. Connect VCC to 3.3V and GND to GND.");
+  html += F("Use: SDA=21 (Pin 22), SCL=33 (Pin 16). NOTE: Input 1 disabled (GPIO 21 used by BMP180). Only 2 GPIOs available on this board.");
   html += F("</p>");
   html += F("</div>");
 
@@ -2639,6 +2811,7 @@ void handleRoot() {
     html += F("<option value='2'");
     if (sms_conn_mode == CONN_WIFI_CELL_BACKUP) html += F(" selected");
     html += F(">WiFi with Cellular Backup</option></select>");
+    html += F("<button type='button' class='b3' onclick='testService(\"sms\")'>Test SMS</button>");
     html += F("<p style='font-size:12px;margin-top:8px;color:#666'>Note: SMS is sent via cellular modem. Messages are limited to 160 characters.</p>");
     html += F("</div>");
   }
@@ -2775,6 +2948,28 @@ void handleRoot() {
   "if(localStorage.getItem('theme')==='dark')document.body.classList.add('dark');"
   "function testService(s){fetch('/test/'+s).then(r=>r.text()).then(d=>alert(s+': '+d)).catch(e=>alert('Error: '+e))}"
   "function testInput(i){if(confirm('Trigger Input '+(i+1)+'?')){fetch('/test/input?id='+i).then(r=>r.text()).then(d=>alert(d)).catch(e=>alert('Error: '+e))}}"
+  "function searchBMP180(){"
+  "fetch('/search/bmp180').then(r=>r.text()).then(d=>{"
+  "const modal=document.createElement('div');"
+  "modal.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999';"
+  "const box=document.createElement('div');"
+  "box.style.cssText='background:var(--card);padding:20px;border-radius:8px;max-width:600px;width:90%';"
+  "box.innerHTML='<h3>I2C Bus Scan Results</h3><textarea readonly style=\"width:100%;height:300px;font-family:monospace;font-size:12px;margin:10px 0;padding:10px\">'+d+'</textarea>"
+  "<button onclick=\"navigator.clipboard.writeText(this.previousElementSibling.value).then(()=>alert(\\'Copied to clipboard!\\'))\">Copy to Clipboard</button> "
+  "<button onclick=\"this.closest(\\'div\\').parentElement.remove()\">Close</button>';"
+  "modal.appendChild(box);document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()}"
+  "}).catch(e=>alert('Error: '+e))}"
+  "function testGPIO(){"
+  "fetch('/test/gpio').then(r=>r.text()).then(d=>{"
+  "const modal=document.createElement('div');"
+  "modal.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999';"
+  "const box=document.createElement('div');"
+  "box.style.cssText='background:var(--card);padding:20px;border-radius:8px;max-width:600px;width:90%';"
+  "box.innerHTML='<h3>GPIO Pin Test Results</h3><textarea readonly style=\"width:100%;height:300px;font-family:monospace;font-size:12px;margin:10px 0;padding:10px\">'+d+'</textarea>"
+  "<button onclick=\"navigator.clipboard.writeText(this.previousElementSibling.value).then(()=>alert(\\'Copied!\\'))\">Copy to Clipboard</button> "
+  "<button onclick=\"this.closest(\\'div\\').parentElement.remove()\">Close</button>';"
+  "modal.appendChild(box);document.body.appendChild(modal);modal.onclick=e=>{if(e.target===modal)modal.remove()}"
+  "}).catch(e=>alert('Error: '+e))}"
   "function downloadConfig(){fetch('/api/config').then(r=>r.json()).then(d=>{"
   "const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});"
   "const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;"
@@ -2959,34 +3154,47 @@ void handleSave() {
   if (server.hasArg("bmp180_scl")) bmp180_scl_pin = server.arg("bmp180_scl").toInt();
   include_bmp180_in_notifications = server.hasArg("bmp180_notif");
 
-  // Re-initialize sensor if settings changed
+  // Re-initialize sensor if settings changed (defer until after HTTP response)
   if (bmp180_enabled && (!bmp180_was_enabled || old_sda != bmp180_sda_pin || old_scl != bmp180_scl_pin)) {
-    addLog("INFO", "BMP180 settings changed - reinitializing sensor");
+    Serial.println(F("\n[SAVE] BMP180 configuration changed:"));
+    if (!bmp180_was_enabled) {
+      Serial.println(F("[SAVE]   - BMP180 enabled"));
+    }
+    if (old_sda != bmp180_sda_pin || old_scl != bmp180_scl_pin) {
+      Serial.printf("[SAVE]   - Pin change: SDA GPIO%d->GPIO%d, SCL GPIO%d->GPIO%d\n",
+                    old_sda, bmp180_sda_pin, old_scl, bmp180_scl_pin);
+    }
+    Serial.println(F("[SAVE] Will reinitialize BMP180 after saving settings..."));
+    Serial.flush();
+    addLog("INFO", "BMP180 settings changed - will reinitialize after save");
     bmp180_initialized = false;
-    initBMP180();
+    bmp180_needs_reinit = true;  // Defer until after HTTP response sent
   } else if (!bmp180_enabled && bmp180_was_enabled) {
+    Serial.println(F("\n[SAVE] BMP180 sensor disabled"));
+    Serial.flush();
     addLog("INFO", "BMP180 sensor disabled");
     bmp180_initialized = false;
+    bmp180_needs_reinit = false;
   }
 
-  bool timeChanged = false;
+  // Handle time zone changes (defer configTime to prevent blocking)
   if (server.hasArg("gmt_offset")) {
     long newOffset = server.arg("gmt_offset").toInt();
     if (newOffset != gmt_offset) {
       gmt_offset = newOffset;
-      timeChanged = true;
+      pending_gmt_offset = gmt_offset;
+      pending_daylight_offset = daylight_offset;
+      needs_time_update = true;  // Defer configTime() call
     }
   }
   if (server.hasArg("day_offset")) {
     int newOffset = server.arg("day_offset").toInt();
     if (newOffset != daylight_offset) {
       daylight_offset = newOffset;
-      timeChanged = true;
+      pending_gmt_offset = gmt_offset;
+      pending_daylight_offset = daylight_offset;
+      needs_time_update = true;  // Defer configTime() call
     }
-  }
-
-  if (timeChanged) {
-    configTime(gmt_offset, daylight_offset, ntpServer);
   }
 
   // Save input configurations
@@ -3041,7 +3249,8 @@ void handleSave() {
     }
   }
 
-  savePreferences();
+  // Defer savePreferences() to prevent blocking during HTTP response
+  needs_save_prefs = true;
   server.send(200, "text/html", F("<html><head><meta http-equiv='refresh' content='2;url=/'></head><body style='text-align:center;padding:50px'><h1>Saved!</h1></body></html>"));
 }
 
@@ -3187,6 +3396,231 @@ void handleTestInput() {
   }
 
   server.send(200, "text/plain", response);
+}
+
+void handleTestSMS() {
+  if (!cellular_enabled || !modem_initialized) {
+    server.send(400, "text/plain", "Cellular modem not enabled or initialized");
+    return;
+  }
+
+  if (!sms_enabled || sms_phone_number.length() == 0) {
+    server.send(400, "text/plain", "SMS not configured");
+    return;
+  }
+
+  String testMessage = "SMS test notification from ESP32-Notifier v" VERSION;
+  bool success = sendSMS(sms_phone_number, testMessage);
+
+  if (success) {
+    server.send(200, "text/plain", "SUCCESS - SMS sent to " + sms_phone_number);
+  } else {
+    server.send(500, "text/plain", "FAILED - Could not send SMS");
+  }
+}
+
+void handleTestBMP180() {
+  if (!bmp180_enabled) {
+    server.send(400, "text/plain", "BMP180 sensor not enabled");
+    return;
+  }
+
+  if (!bmp180_initialized) {
+    server.send(400, "text/plain", "BMP180 sensor not initialized - check wiring");
+    return;
+  }
+
+  // Get fresh sensor readings
+  updateBMP180();
+
+  String data = "BMP180 Sensor Readings:\n";
+  data += "Temperature: " + String(last_temperature, 1) + "°C / " + String(last_temperature * 9.0 / 5.0 + 32.0, 1) + "°F\n";
+  data += "Pressure: " + String(last_pressure, 1) + " hPa / " + String(last_pressure * 0.02953, 2) + " inHg\n";
+  data += "Altitude: " + String(last_altitude, 1) + " m / " + String(last_altitude * 3.28084, 1) + " ft\n";
+  data += "I2C Pins: SDA=GPIO" + String(bmp180_sda_pin) + ", SCL=GPIO" + String(bmp180_scl_pin);
+
+  server.send(200, "text/plain", data);
+}
+
+void handleSearchBMP180() {
+  // Scan I2C bus for BMP180 sensor at address 0x77
+  String result = "=== I2C BUS DIAGNOSTIC SCAN ===\n\n";
+  result += "Configuration:\n";
+  result += "  SDA Pin: GPIO" + String(bmp180_sda_pin) + "\n";
+  result += "  SCL Pin: GPIO" + String(bmp180_scl_pin) + "\n";
+  result += "  Clock Speed: 100kHz\n";
+  result += "  Pull-ups: Internal (enabled)\n\n";
+
+  // Properly reinitialize Wire with the configured pins
+  Wire.end();
+  delay(100);
+
+  // Enable internal pull-ups
+  pinMode(bmp180_sda_pin, INPUT_PULLUP);
+  pinMode(bmp180_scl_pin, INPUT_PULLUP);
+  delay(50);
+
+  Wire.begin(bmp180_sda_pin, bmp180_scl_pin);
+  Wire.setClock(100000);  // 100kHz for better reliability during scan
+  delay(100);
+
+  result += "Scanning I2C addresses (0x01 - 0x7F)...\n";
+  result += "----------------------------------------\n";
+
+  bool found = false;
+  int deviceCount = 0;
+
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    uint8_t error = Wire.endTransmission();
+
+    if (error == 0) {
+      deviceCount++;
+      result += "0x";
+      if (addr < 16) result += "0";  // Add leading zero for single hex digit
+      result += String(addr, HEX);
+      result += " - ";
+
+      if (addr == 0x77) {
+        result += "BMP180/BMP085 FOUND!";
+        found = true;
+      } else if (addr == 0x76) {
+        result += "BME280/BMP280 (wrong sensor!)";
+      } else {
+        result += "Unknown device";
+      }
+      result += "\n";
+    }
+  }
+
+  result += "----------------------------------------\n";
+  result += "Total I2C devices found: " + String(deviceCount) + "\n\n";
+
+  if (!found) {
+    if (deviceCount > 0) {
+      result += "STATUS: I2C bus is working, but no BMP180!\n";
+      result += "The sensor at 0x77 is NOT a BMP180.\n";
+      result += "If you see 0x76, that's a BME280/BMP280 (different sensor).\n";
+    } else {
+      result += "STATUS: NO I2C devices detected!\n";
+      result += "This indicates a WIRING PROBLEM.\n\n";
+      result += "TROUBLESHOOTING CHECKLIST:\n";
+      result += "[ ] VCC connected to 3.3V (NOT 5V!)\n";
+      result += "[ ] GND connected to GND\n";
+      result += "[ ] SDA wire connected to GPIO" + String(bmp180_sda_pin) + "\n";
+      result += "[ ] SCL wire connected to GPIO" + String(bmp180_scl_pin) + "\n";
+      result += "[ ] All connections are TIGHT and SECURE\n";
+      result += "[ ] Not using a damaged breadboard/wires\n";
+      result += "[ ] Sensor module has power LED lit (if present)\n\n";
+      result += "THINGS TO TRY:\n";
+      result += "1. Swap SDA and SCL wires (labels might be wrong)\n";
+      result += "2. Try different GPIO pins (e.g., GPIO21/22)\n";
+      result += "3. Use shorter wires (< 10cm)\n";
+      result += "4. Test with a different BMP180 module\n";
+      result += "5. Measure voltage: VCC should be 3.3V\n";
+      result += "6. Check sensor with multimeter for shorts\n";
+    }
+  } else {
+    result += "SUCCESS: BMP180 sensor detected!\n";
+    result += "The sensor is communicating properly.\n";
+    result += "You can now enable it in the settings.\n";
+  }
+
+  server.send(200, "text/plain", result);
+}
+
+void handleTestGPIO() {
+  // Test GPIO pins for I2C - helps diagnose hardware issues
+  String result = "=== GPIO PIN DIAGNOSTIC ===\n\n";
+  result += "Testing GPIO " + String(bmp180_sda_pin) + " (SDA) and GPIO " + String(bmp180_scl_pin) + " (SCL)\n\n";
+
+  // Test 1: Check if pins can be set as inputs
+  pinMode(bmp180_sda_pin, INPUT);
+  pinMode(bmp180_scl_pin, INPUT);
+  delay(10);
+  int sda_read = digitalRead(bmp180_sda_pin);
+  int scl_read = digitalRead(bmp180_scl_pin);
+
+  result += "Test 1 - INPUT mode (no pull-up):\n";
+  result += "  SDA (GPIO" + String(bmp180_sda_pin) + "): " + String(sda_read) + "\n";
+  result += "  SCL (GPIO" + String(bmp180_scl_pin) + "): " + String(scl_read) + "\n\n";
+
+  // Test 2: Enable pull-ups and read again
+  pinMode(bmp180_sda_pin, INPUT_PULLUP);
+  pinMode(bmp180_scl_pin, INPUT_PULLUP);
+  delay(10);
+  int sda_pullup = digitalRead(bmp180_sda_pin);
+  int scl_pullup = digitalRead(bmp180_scl_pin);
+
+  result += "Test 2 - INPUT_PULLUP mode:\n";
+  result += "  SDA (GPIO" + String(bmp180_sda_pin) + "): " + String(sda_pullup);
+  if (sda_pullup == HIGH) result += " ✓ (Good)\n";
+  else result += " ✗ (Should be HIGH - pin may be shorted to GND!)\n";
+
+  result += "  SCL (GPIO" + String(bmp180_scl_pin) + "): " + String(scl_pullup);
+  if (scl_pullup == HIGH) result += " ✓ (Good)\n";
+  else result += " ✗ (Should be HIGH - pin may be shorted to GND!)\n";
+
+  result += "\nDIAGNOSIS:\n";
+  if (sda_pullup == LOW || scl_pullup == LOW) {
+    result += "⚠️  WARNING: One or both pins read LOW with pull-up enabled!\n";
+    result += "This usually means:\n";
+    result += "  1. Wire is shorted to GND\n";
+    result += "  2. Sensor module is damaged/shorted\n";
+    result += "  3. Wrong pin number (pin doesn't exist)\n\n";
+    result += "ACTION: Disconnect the BMP180 and run this test again.\n";
+    result += "If pins read HIGH when disconnected, the sensor is faulty.\n";
+  } else {
+    result += "✓ GPIO pins appear to be working correctly.\n";
+    result += "The problem is likely:\n";
+    result += "  1. BMP180 module not receiving power (check 3.3V connection)\n";
+    result += "  2. Faulty BMP180 sensor chip\n";
+    result += "  3. Incorrect wiring (check connections carefully)\n\n";
+    result += "NEXT STEPS:\n";
+    result += "  1. Measure voltage at BMP180 VCC pin (should be 3.3V)\n";
+    result += "  2. Check if sensor has a power LED (should be lit)\n";
+    result += "  3. Try sensor on a different ESP32 board\n";
+    result += "  4. The sensor modules might both be defective\n";
+  }
+
+  server.send(200, "text/plain", result);
+}
+
+void handleTestCellular() {
+  if (!cellular_enabled) {
+    server.send(400, "text/plain", "Cellular modem not enabled");
+    return;
+  }
+
+  if (!modem_initialized) {
+    server.send(400, "text/plain", "Cellular modem not initialized");
+    return;
+  }
+
+  String result = "Cellular Modem Test:\n\n";
+  result += "Model: " + modem_model + "\n";
+  result += "IMEI: " + modem_imei + "\n";
+  result += "ICCID: " + modem_iccid + "\n";
+  result += "Network: " + cellular_operator + "\n";
+  result += "Signal: " + String(cellular_signal_strength) + "\n";
+  result += "Connected: " + String(cellular_connected ? "Yes" : "No") + "\n";
+  result += "APN: " + apn + "\n\n";
+
+  // Test AT command
+  String atResponse = sendATCommand("AT", 1000);
+  if (atResponse.indexOf("OK") >= 0) {
+    result += "AT Command: OK\n";
+  } else {
+    result += "AT Command: FAILED\n";
+  }
+
+  // Test signal quality
+  String signalResponse = sendATCommand("AT+CSQ", 1000);
+  if (signalResponse.length() > 0) {
+    result += "Signal Response: " + signalResponse.substring(0, 50) + "\n";
+  }
+
+  server.send(200, "text/plain", result);
 }
 
 void handleResetWiFi() {
